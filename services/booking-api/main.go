@@ -7,6 +7,7 @@ import (
 	"log/slog"      // 구조화(JSON) 로그
 	"net/http"      // HTTP 서버
 	"os"            // 환경변수, 표준출력
+	"strconv"       // 문자열 -> 숫자 변환 (환경변수 파싱)
 	"time"          // 타임아웃 설정
 
 	// pgxpool: PostgreSQL 커넥션 풀. 요청마다 새 연결을 만들지 않고 미리 열어둔
@@ -24,7 +25,9 @@ type healthResponse struct {
 // app: 핸들러들이 공유해야 하는 것(DB 풀 등)을 담는 구조체.
 // Go 에는 전역 변수 대신 이렇게 의존성을 묶어 메서드로 핸들러를 만드는 관례가 있다.
 type app struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	store  *Store
+	parser *Parser
 }
 
 // healthz: GET /healthz. DB 에 실제로 쿼리를 날려서 살아 있는지 확인한다.
@@ -96,17 +99,45 @@ func main() {
 	defer pool.Close() // main 이 끝날 때 연결을 정리한다.
 	slog.Info("database connected")
 
-	a := &app{db: pool}
+	// 스키마 마이그레이션. 실패하면 떠 있어도 의미가 없으므로 종료한다.
+	if err := runMigrations(ctx, pool); err != nil {
+		slog.Error("migration failed", "err", err)
+		os.Exit(1)
+	}
+
+	// Claude 설정. 키는 mustEnv 로 읽어 NewParser 에만 넘기고 어디에도 저장·출력하지 않는다.
+	apiKey := mustEnv("ANTHROPIC_API_KEY")
+	workspaceID := os.Getenv("ANTHROPIC_WORKSPACE_ID") // 선택
+	model := os.Getenv("CLAUDE_MODEL")
+	if model == "" {
+		model = "claude-opus-5-5"
+	}
+	parseTimeout := 10 * time.Second
+	if v := os.Getenv("CLAUDE_TIMEOUT_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			parseTimeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+	// 시작 로그에 키는 절대 찍지 않는다. "설정됨" 여부와 길이만으로 디버깅은 충분하다.
+	slog.Info("claude configured", "model", model, "timeout_ms", parseTimeout.Milliseconds(), "api_key_set", apiKey != "", "workspace_id_set", workspaceID != "")
+
+	a := &app{
+		db:     pool,
+		store:  &Store{db: pool},
+		parser: NewParser(apiKey, workspaceID, model, parseTimeout),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
+	mux.HandleFunc("POST /bookings", a.createBooking)
+	mux.HandleFunc("GET /bookings/{id}", a.getBooking)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      30 * time.Second, // Claude 호출(최대 10초) 포함 여유
 		IdleTimeout:       60 * time.Second,
 	}
 

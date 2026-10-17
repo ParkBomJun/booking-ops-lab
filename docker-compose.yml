@@ -35,6 +35,11 @@ services:
       # 호스트 이름 "postgres" 는 compose 가 만든 내부 네트워크의 서비스 이름이다.
       # 컨테이너 간 통신이므로 localhost 가 아니다.
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # Claude 파싱 설정. 키는 .env 에서만 온다. 모델·타임아웃은 장애 훈련 때 바꿔가며 쓴다.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_WORKSPACE_ID: ${ANTHROPIC_WORKSPACE_ID:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-5-5}
+      CLAUDE_TIMEOUT_MS: ${CLAUDE_TIMEOUT_MS:-10000}
     ports:
       - "8080:8080"
     # postgres 의 healthcheck 가 통과한 뒤에만 API 를 시작한다.
