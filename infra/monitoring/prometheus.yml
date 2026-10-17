@@ -1,0 +1,25 @@
+# Prometheus 전역 설정
+global:
+  scrape_interval: 15s      # 모든 대상의 기본 수집 주기. 너무 짧으면 저장량·부하 증가, 너무 길면 장애 감지가 늦어진다.
+  evaluation_interval: 15s  # 알림 규칙을 평가하는 주기 (2단계 Alertmanager 에서 사용)
+  scrape_timeout: 10s       # 대상이 이 시간 안에 응답하지 않으면 수집 실패로 처리. scrape_interval 보다 짧아야 한다.
+
+scrape_configs:
+  # Prometheus 자기 자신. 수집기가 건강한지 보는 용도.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: booking-api
+    metrics_path: /metrics
+    # 한 번의 스크레이프에서 받아들일 샘플(시계열 값) 상한. 초과하면 그 스크레이프 전체를 버리고
+    # up=0, scrape_samples_post_metric_relabeling 지표로 드러난다.
+    # 목적: 라벨 카디널리티 폭발(예: route 에 실제 ID 가 들어가는 버그)이 Prometheus 메모리를 잠식하기 전에 차단.
+    # 현재 booking-api 는 Go 런타임 지표 포함 약 150~200 샘플이므로 1000 은 정상 운영에 충분하고 폭발은 막는 값.
+    sample_limit: 1000
+    static_configs:
+      # compose 내부 네트워크의 서비스 이름. 호스트에서 접근하는 localhost:8080 이 아니다.
+      - targets: ["booking-api:8080"]
+        labels:
+          service: booking-api
+          env: local

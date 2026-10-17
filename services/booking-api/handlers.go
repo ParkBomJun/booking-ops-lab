@@ -40,22 +40,26 @@ func (a *app) createBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	// 이 요청의 모든 로그 줄에 booking_id 를 붙인다. 식별자는 클라이언트가 보낸 멱등키다.
+	// DB 의 숫자 id 는 저장 후에야 생기므로, 저장 전후를 하나로 추적하려면 멱등키가 맞다.
+	log := slog.With("booking_id", key)
+	ctx := withLogger(r.Context(), log)
 
 	// 1) 멱등성 선조회. 같은 키가 이미 있으면 Claude 를 다시 부르지 않는다 (비용·지연 절약).
 	//    단, 이 조회만으로는 동시 요청의 경쟁을 막지 못한다 -> 최종 방어는 Insert 의 UNIQUE 제약.
 	if existing, err := a.store.GetByKey(ctx, key); err != nil {
-		slog.Error("lookup failed", "booking_key", key, "err", err.Error())
+		log.Error("lookup failed", "stage", "idempotency", "err", err.Error())
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	} else if existing != nil {
-		slog.Info("booking duplicate", "booking_id", existing.ID, "booking_key", key, "stage", "idempotency")
+		processedTotal.WithLabelValues("duplicate").Inc()
+		log.Info("booking duplicate", "stage", "idempotency", "row_id", existing.ID)
 		writeJSON(w, http.StatusOK, existing)
 		return
 	}
 
 	// 2) 파싱. 실패는 에러가 아니라 "검토 대기" 라는 정상 경로다.
-	parsed, err := a.parser.Parse(ctx, key, req.Text)
+	parsed, err := a.parser.Parse(ctx, req.Text)
 	reason := ""
 	if err != nil {
 		var pe *ParseError
@@ -69,13 +73,18 @@ func (a *app) createBooking(w http.ResponseWriter, r *http.Request) {
 	// 3) 저장 (멱등)
 	b, created, err := a.store.Insert(ctx, key, req.Text, parsed, reason)
 	if err != nil {
-		slog.Error("insert failed", "booking_key", key, "err", err.Error())
+		log.Error("insert failed", "stage", "store", "err", err.Error())
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
-	slog.Info("booking processed",
-		"booking_id", b.ID, "booking_key", key, "stage", "store",
+	if created {
+		processedTotal.WithLabelValues(b.Status).Inc() // "parsed" 또는 "needs_review"
+	} else {
+		processedTotal.WithLabelValues("duplicate").Inc() // 동시 요청 경쟁에서 진 경우
+	}
+	log.Info("booking processed",
+		"stage", "store", "row_id", b.ID,
 		"status", b.Status, "needs_review", b.NeedsReview, "created", created,
 		"elapsed_ms", time.Since(start).Milliseconds())
 

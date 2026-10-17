@@ -13,6 +13,8 @@ import (
 	// pgxpool: PostgreSQL 커넥션 풀. 요청마다 새 연결을 만들지 않고 미리 열어둔
 	// 연결을 재사용한다. 외부 의존성은 이것 하나뿐이다.
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp" // /metrics 핸들러
 )
 
 // healthResponse: /healthz 응답 형태.
@@ -127,14 +129,18 @@ func main() {
 		parser: NewParser(apiKey, workspaceID, model, parseTimeout),
 	}
 
+	// DB 조회형 Gauge 등록. promauto 로 만든 나머지 지표는 이미 기본 레지스트리에 들어가 있다.
+	prometheus.MustRegister(newDBCollector(pool))
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
+	mux.HandleFunc("GET /metrics", promhttp.Handler().ServeHTTP)
 	mux.HandleFunc("POST /bookings", a.createBooking)
 	mux.HandleFunc("GET /bookings/{id}", a.getBooking)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           mux,
+		Handler:           metricsMiddleware(mux), // mux 바깥을 감싸야 404 도 집계된다
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second, // Claude 호출(최대 10초) 포함 여유

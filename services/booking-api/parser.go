@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -87,7 +86,8 @@ var locodeRe = regexp.MustCompile(`^[A-Z]{5}$`)
 
 // Parse: 원문 -> ParsedBooking. 실패하면 반드시 *ParseError 를 돌려준다.
 // usage(토큰 사용량) 는 성공·실패와 관계없이 응답을 받았다면 로그에 남긴다 -> 나중에 비용 지표로 쓴다.
-func (p *Parser) Parse(ctx context.Context, bookingID string, raw string) (*ParsedBooking, error) {
+func (p *Parser) Parse(ctx context.Context, raw string) (*ParsedBooking, error) {
+	log := logFrom(ctx) // booking_id 가 이미 붙어 있는 로거
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
@@ -103,6 +103,7 @@ func (p *Parser) Parse(ctx context.Context, bookingID string, raw string) (*Pars
 		OutputConfig: anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffortLow},
 	})
 	elapsed := time.Since(start)
+	claudeDuration.Observe(elapsed.Seconds()) // 성공·실패 모두 관측. 타임아웃이면 ~10s 버킷에 쌓인다.
 
 	if err != nil {
 		// 타임아웃과 그 외 API 에러를 구분한다. 장애 훈련 2번(Claude 타임아웃)에서 이 라벨로 지표가 튄다.
@@ -111,7 +112,8 @@ func (p *Parser) Parse(ctx context.Context, bookingID string, raw string) (*Pars
 			reason = ReasonTimeout
 		}
 		var apiErr *anthropic.Error
-		attrs := []any{"booking_id", bookingID, "stage", "parse", "reason", reason, "elapsed_ms", elapsed.Milliseconds()}
+		claudeRequestsTotal.WithLabelValues(reason).Inc()
+		attrs := []any{"stage", "parse", "reason", reason, "elapsed_ms", elapsed.Milliseconds()}
 		if errors.As(err, &apiErr) {
 			// apiErr.Error() 는 메서드·URL·상태·요청ID·응답 본문만 담고 요청 헤더(API 키)는 포함하지 않는다.
 			// 처음엔 status 만 남겼다가 400 원인을 알 수 없어 재현이 필요했다 -> 메시지도 남긴다 (ai-usage.md 참고).
@@ -119,13 +121,16 @@ func (p *Parser) Parse(ctx context.Context, bookingID string, raw string) (*Pars
 		} else {
 			attrs = append(attrs, "err", err.Error())
 		}
-		slog.Error("claude parse failed", attrs...)
+		log.Error("claude parse failed", attrs...)
 		return nil, &ParseError{Reason: reason, Err: err}
 	}
 
 	// 토큰 사용량 로그. 요청당 한 줄. 2단계에서 이 값을 Prometheus 카운터로도 올린다.
-	slog.Info("claude usage",
-		"booking_id", bookingID, "stage", "parse", "model", p.model,
+	claudeTokensTotal.WithLabelValues("input", p.model).Add(float64(resp.Usage.InputTokens))
+	claudeTokensTotal.WithLabelValues("output", p.model).Add(float64(resp.Usage.OutputTokens))
+	claudeTokensTotal.WithLabelValues("cache_read", p.model).Add(float64(resp.Usage.CacheReadInputTokens))
+	log.Info("claude usage",
+		"stage", "parse", "model", p.model,
 		"input_tokens", resp.Usage.InputTokens,
 		"output_tokens", resp.Usage.OutputTokens,
 		"cache_read_tokens", resp.Usage.CacheReadInputTokens,
@@ -134,6 +139,7 @@ func (p *Parser) Parse(ctx context.Context, bookingID string, raw string) (*Pars
 	)
 
 	if resp.StopReason == anthropic.StopReasonMaxTokens || resp.StopReason == anthropic.StopReasonRefusal {
+		claudeRequestsTotal.WithLabelValues(ReasonInvalidJSON).Inc()
 		return nil, &ParseError{Reason: ReasonInvalidJSON, Err: fmt.Errorf("stop_reason=%s", resp.StopReason)}
 	}
 
@@ -152,12 +158,16 @@ func (p *Parser) Parse(ctx context.Context, bookingID string, raw string) (*Pars
 
 	var out ParsedBooking
 	if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &out); err != nil {
-		slog.Warn("claude returned non-json", "booking_id", bookingID, "stage", "parse", "err", err.Error())
+		claudeRequestsTotal.WithLabelValues(ReasonInvalidJSON).Inc()
+		log.Warn("claude returned non-json", "stage", "parse", "err", err.Error())
 		return nil, &ParseError{Reason: ReasonInvalidJSON, Err: err}
 	}
 	if err := out.validate(); err != nil {
+		claudeRequestsTotal.WithLabelValues(ReasonValidation).Inc()
+		log.Warn("claude output failed validation", "stage", "parse", "err", err.Error())
 		return nil, &ParseError{Reason: ReasonValidation, Err: err}
 	}
+	claudeRequestsTotal.WithLabelValues("ok").Inc()
 	return &out, nil
 }
 

@@ -1,0 +1,10 @@
+# 지정한 폴더의 JSON 파일을 대시보드로 자동 로드한다.
+apiVersion: 1
+providers:
+  - name: booking-ops
+    folder: Booking Ops
+    type: file
+    disableDeletion: true    # UI 에서 삭제 방지
+    allowUiUpdates: false    # UI 수정은 저장 안 됨. 바꾸려면 JSON 을 고쳐 커밋한다.
+    options:
+      path: /var/lib/grafana/dashboards

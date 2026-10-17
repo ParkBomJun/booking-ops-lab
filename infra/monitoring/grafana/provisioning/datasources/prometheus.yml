@@ -1,0 +1,10 @@
+# Grafana 가 시작할 때 자동으로 등록하는 데이터소스. UI 에서 손으로 추가하지 않는다 -> 서버에서도 동일 구성.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus          # 대시보드 JSON 이 이 uid 로 데이터소스를 참조한다
+    access: proxy            # 브라우저가 아니라 Grafana 서버가 Prometheus 에 질의 (Prometheus 를 외부에 노출할 필요 없음)
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false          # UI 에서 바꾸지 못하게 잠근다. 설정은 코드로만.

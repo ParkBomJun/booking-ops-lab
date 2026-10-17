@@ -80,3 +80,27 @@
   교훈: **비밀값 보호와 진단 가능성은 상충하지 않는다. 무엇이 비밀인지 정확히 확인하고 그것만 가린다.**
 - **실제 원인**: 발급한 키가 특정 워크스페이스에 묶이지 않은 조직 범위 키여서 `anthropic-workspace-id` 헤더가 필요했다.
   코드에 `ANTHROPIC_WORKSPACE_ID`(선택) 지원을 추가. 권장은 **워크스페이스 범위 키를 새로 발급**하는 것 — 최소 권한 원칙에도 맞고 헤더가 필요 없다.
+
+## 2026-10-17 — 1단계: `/metrics`, Prometheus, Grafana
+
+### 한 일
+- `metrics.go`: 지표 7종(`docs/metrics.md`), DB 조회형 Gauge Collector, HTTP 미들웨어(404/405 → `route="unknown"`)
+- `ctxlog.go`: context 로거. 요청 범위 모든 로그 줄에 `booking_id` 보장
+- `infra/monitoring/prometheus.yml`(`sample_limit: 1000`), Grafana 데이터소스·대시보드 프로비저닝(패널 10개), compose에 Prometheus v3.5.0 / Grafana 12.2.0 추가
+- Grafana는 `.env` 비밀번호, 가입 금지, UI 수정 불가(설정은 코드로만)
+
+### AI 실수와 수정
+- **존재하지 않는 함수 호출**: 상태 코드를 문자열로 바꾸며 `http.StatusText0`라는 없는 함수를 썼다. 컴파일 전 자체 검토에서 발견해 `strconv.Itoa`로 교체. Go 표준 라이브러리 함수명을 기억으로 쓰지 말고 확인할 것
+- **unused import**: parser에서 `slog` 직접 호출을 ctx 로거로 바꾼 뒤 import를 안 지워 `go vet` 실패 → 삭제
+- **로그 식별자 불일치(이전 작업의 숨은 버그)**: 이전 커밋에서 parser는 `booking_id`=멱등키, handler는 `booking_id`=DB 숫자 id를 찍고 있었다. 같은 키 이름에 다른 의미가 섞여 로그 검색이 깨지는 상태였다. 이번에 `booking_id`=멱등키, `row_id`=DB id로 통일
+
+### 검증 결과
+| 항목 | 결과 |
+|---|---|
+| `/admin`, `/.env`, `/wp-login.php`(404), `DELETE /healthz`(405) | 전부 `route="unknown"` 한 시계열로 집계 |
+| 정상 라우트 | `/healthz`, `/bookings`, `/bookings/{id}` 패턴 라벨 |
+| 샘플 수 | 129 (sample_limit 1000) |
+| Prometheus 타깃 | booking-api `up`, `booking_needs_review_count`=4 질의 성공 |
+| Claude 지표 | 실제 호출 1건: ok=1, input 336 / output 89 토큰, 1.31s |
+| 로그 `booking_id` | stage 포함 로그 3/3 줄에 존재 |
+| Grafana | 대시보드 자동 로드 확인 (http://localhost:3000/d/booking-api) |
