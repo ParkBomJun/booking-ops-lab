@@ -21,3 +21,24 @@
 - `GET /healthz` → 200, `{"status":"ok"}`
 - `POST /healthz` → 405 (메서드 지정 라우팅 `"GET /healthz"` 동작 확인)
 - 시작 로그가 한 줄 JSON으로 출력됨
+
+## 2026-10-17 — 1단계: docker-compose(PostgreSQL + booking-api), `/healthz` DB 확인
+
+### 한 일
+- `services/booking-api/Dockerfile`: 멀티스테이지 빌드(golang:1.27-alpine → distroless static nonroot), 최종 이미지 18.8MB
+- `docker-compose.yml`: postgres:17-alpine(healthcheck, 명명 볼륨) + booking-api(`depends_on: service_healthy`)
+- `.env.example` 추가. 실제 `.env`는 gitignore 대상
+- `main.go`: `pgxpool`로 DB 연결, `/healthz`가 2초 타임아웃 Ping 실패 시 503 + `{"status":"degraded"}`
+- 시작 시 `DATABASE_URL` 없으면 즉시 종료(fail-fast), DB 도달 불가 시 종료 후 compose restart에 맡김
+
+### AI 실수와 수정
+- 이번 작업에서는 빌드·실행 모두 첫 시도에 통과. 단, AI가 처음 제안한 compose의 booking-api `healthcheck`는
+  distroless 이미지에 curl/셸이 없어 동작할 수 없음을 작성 중 확인하고 제거했다. 대신 외부 `healthcheck.sh`와
+  Prometheus로 확인하는 방향으로 메모를 남겼다.
+
+### 검증 결과
+| 상황 | 응답 |
+|---|---|
+| 정상 | 200 `{"status":"ok","checks":{"db":"ok"}}` |
+| `docker compose stop postgres` | 503 `{"status":"degraded","checks":{"db":"fail: context deadline exceeded"}}` |
+| `docker compose start postgres` 후 | 200으로 자동 복귀 (재시작 불필요, 풀이 재연결) |

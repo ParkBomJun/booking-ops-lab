@@ -1,0 +1,50 @@
+# 로컬과 서버에서 동일하게 쓰는 전체 스택 정의.
+# 지금은 DB + API 두 개. 이후 Prometheus, Grafana, worker 등이 여기에 추가된다.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: booking-postgres
+    # 환경변수 값은 .env 에서 온다. compose 는 같은 디렉터리의 .env 를 자동으로 읽는다.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # 로컬 디버깅용으로만 호스트에 노출. 서버에서는 이 줄을 빼고 내부 네트워크로만 접근한다.
+    ports:
+      - "5432:5432"
+    # 명명된 볼륨. 컨테이너를 지워도 데이터가 남는다.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # DB 가 "실제로 접속 가능한 상태" 인지 compose 가 판단하는 기준.
+    # pg_isready 는 postgres 이미지에 포함된 접속 확인 도구.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  booking-api:
+    # 이미지 이름을 미리 정한 이유: 나중에 CI 가 GHCR 에 올릴 때 같은 이름을 쓴다.
+    build: ./services/booking-api
+    image: booking-api:local
+    container_name: booking-api
+    environment:
+      PORT: "8080"
+      # 호스트 이름 "postgres" 는 compose 가 만든 내부 네트워크의 서비스 이름이다.
+      # 컨테이너 간 통신이므로 localhost 가 아니다.
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    ports:
+      - "8080:8080"
+    # postgres 의 healthcheck 가 통과한 뒤에만 API 를 시작한다.
+    # 단순 depends_on 은 "컨테이너 시작" 만 기다려서 DB 준비 전에 연결 시도가 실패할 수 있다.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # distroless 이미지에는 curl 이 없어 여기서 healthcheck 를 쓸 수 없다.
+    # 대신 다음 단계에서 Prometheus 블랙박스/외부 healthcheck.sh 로 확인한다.
+    restart: unless-stopped
+
+volumes:
+  pgdata:

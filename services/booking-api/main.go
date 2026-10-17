@@ -1,65 +1,116 @@
 // Package main: booking-api 서비스의 시작점.
-// Go 프로그램은 반드시 package main + func main() 에서 실행이 시작된다.
 package main
 
 import (
+	"context"       // 타임아웃·취소 신호를 함수 호출 체인에 전달하는 표준 도구
 	"encoding/json" // 응답을 JSON 으로 만들기 위한 표준 라이브러리
-	"log/slog"      // 구조화(JSON) 로그. CLAUDE.md 규칙: 모든 로그는 slog JSON
-	"net/http"      // HTTP 서버. 외부 프레임워크 없이 표준 라이브러리만 사용
-	"os"            // 환경변수 읽기, 표준출력
-	"time"          // 서버 타임아웃 설정
+	"log/slog"      // 구조화(JSON) 로그
+	"net/http"      // HTTP 서버
+	"os"            // 환경변수, 표준출력
+	"time"          // 타임아웃 설정
+
+	// pgxpool: PostgreSQL 커넥션 풀. 요청마다 새 연결을 만들지 않고 미리 열어둔
+	// 연결을 재사용한다. 외부 의존성은 이것 하나뿐이다.
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// healthResponse: /healthz 가 돌려줄 응답의 형태.
-// 뒤에 붙은 `json:"status"` 는 "구조체 태그". JSON 으로 바꿀 때 필드 이름을 정해준다.
-// 지금은 status 하나지만, 다음 단계에서 DB 연결 상태 같은 의존성 항목을 추가할 자리다.
+// healthResponse: /healthz 응답 형태.
+// Checks 에 의존성별 상태를 담는다. 지금은 "db" 하나지만 나중에 늘어난다.
 type healthResponse struct {
-	Status string `json:"status"`
+	Status string            `json:"status"`
+	Checks map[string]string `json:"checks"`
 }
 
-// healthzHandler: GET /healthz 요청을 처리하는 함수.
-// Go 의 HTTP 핸들러는 항상 (ResponseWriter, *Request) 두 인자를 받는 형태로 고정이다.
-//   - w: 응답을 써 넣는 곳
-//   - r: 들어온 요청 정보
-func healthzHandler(w http.ResponseWriter, r *http.Request) {
+// app: 핸들러들이 공유해야 하는 것(DB 풀 등)을 담는 구조체.
+// Go 에는 전역 변수 대신 이렇게 의존성을 묶어 메서드로 핸들러를 만드는 관례가 있다.
+type app struct {
+	db *pgxpool.Pool
+}
+
+// healthz: GET /healthz. DB 에 실제로 쿼리를 날려서 살아 있는지 확인한다.
+// 앞에 (a *app) 가 붙은 함수를 "메서드" 라고 부른다. a.db 로 풀에 접근할 수 있다.
+func (a *app) healthz(w http.ResponseWriter, r *http.Request) {
+	// 헬스체크가 DB 장애에 끌려가 무한 대기하면 안 된다. 2초 안에 답이 없으면 실패 처리.
+	// defer cancel(): 이 함수가 끝날 때 반드시 cancel 을 호출해 자원을 정리한다.
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	resp := healthResponse{Status: "ok", Checks: map[string]string{}}
+	status := http.StatusOK
+
+	// Ping: 풀에서 연결 하나를 꺼내 ";" 같은 가벼운 쿼리로 응답을 확인한다.
+	if err := a.db.Ping(ctx); err != nil {
+		resp.Status = "degraded"
+		resp.Checks["db"] = "fail: " + err.Error()
+		status = http.StatusServiceUnavailable // 503. 로드밸런서·compose 가 "비정상" 으로 인식.
+		slog.Error("healthz db check failed", "err", err)
+	} else {
+		resp.Checks["db"] = "ok"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK) // 200. 나중에 DB가 죽으면 여기서 503 을 돌려준다.
-	json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// mustEnv: 필수 환경변수를 읽는다. 없으면 즉시 종료.
+// 설정이 빠진 채로 조용히 떠서 나중에 터지는 것보다, 시작 시점에 크게 실패하는 것이 운영상 낫다.
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		slog.Error("required environment variable is missing", "key", key)
+		os.Exit(1)
+	}
+	return v
 }
 
 func main() {
-	// slog 를 JSON 출력으로 설정하고 기본 로거로 등록한다.
-	// 이후 slog.Info(...) 호출은 전부 한 줄짜리 JSON 으로 stdout 에 찍힌다.
-	// -> 도커 로그 수집, 나중에 Loki/Grafana 연동 때 파싱이 쉬워진다.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// 포트는 환경변수 PORT 로 바꿀 수 있게 한다 (12-factor 방식). 없으면 8080.
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	// 라우터(mux): URL 경로와 핸들러 함수를 연결하는 표.
-	// "GET /healthz" 처럼 메서드까지 지정하는 문법은 Go 1.22 부터 지원된다.
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthzHandler)
+	// DATABASE_URL 형식: postgres://user:password@host:5432/dbname?sslmode=disable
+	// 비밀값(비밀번호)이 들어 있으므로 코드에 쓰지 않고 .env 에서만 주입한다.
+	dsn := mustEnv("DATABASE_URL")
 
-	// http.ListenAndServe 를 바로 쓰지 않고 Server 구조체를 만드는 이유:
-	// 타임아웃을 지정하기 위해서다. 타임아웃이 없으면 느린 클라이언트 하나가
-	// 연결을 계속 붙잡아 서버 자원을 고갈시킬 수 있다 (운영 관점의 기본 방어).
+	// 풀 생성에도 타임아웃을 둔다. DB 가 아직 안 떴으면 5초 후 실패하고 종료한다.
+	// compose 의 restart 정책이 다시 띄워주므로, 여기서 재시도 루프를 직접 짜지 않는다.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// pgxpool.New 는 설정만 파싱하고 실제 연결은 지연(lazy) 생성한다.
+	// 그래서 바로 Ping 을 한 번 날려 시작 시점에 DB 도달 가능 여부를 확인한다.
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		slog.Error("invalid DATABASE_URL", "err", err)
+		os.Exit(1)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		slog.Error("cannot reach database", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close() // main 이 끝날 때 연결을 정리한다.
+	slog.Info("database connected")
+
+	a := &app{db: pool}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", a.healthz)
+
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,  // 요청 헤더를 다 받기까지 허용 시간
-		ReadTimeout:       10 * time.Second, // 요청 본문 포함 전체 읽기 시간
-		WriteTimeout:      10 * time.Second, // 응답 쓰기 시간
-		IdleTimeout:       60 * time.Second, // keep-alive 연결 유지 시간
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	slog.Info("booking-api starting", "addr", srv.Addr)
-
-	// ListenAndServe 는 서버가 멈출 때까지 블로킹된다. 에러가 나면 로그 찍고 종료.
 	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
