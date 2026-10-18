@@ -125,3 +125,15 @@ func (c *backlogCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(c.oldest, prometheus.GaugeValue, oldest)
 }
+
+// preRegisterTransitions: 가능한 전이 라벨 조합을 0 으로 미리 만든다.
+// CounterVec 은 첫 Inc 전에는 시계열이 없다. 그러면 "전이가 0 건" 과 "지표가 없음" 이 구분되지 않아
+// `rate(...) == 0` 류의 정체 알림이 재시작 직후에는 평가조차 되지 않는다. 0 을 먼저 내보내면 그 간극이 사라진다.
+func preRegisterTransitions() {
+	for from, tos := range allowedTransitions {
+		for _, to := range tos {
+			transitionsTotal.WithLabelValues(from, to).Add(0)
+		}
+	}
+	versionConflicts.Add(0)
+}

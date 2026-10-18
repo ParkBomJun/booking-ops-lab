@@ -50,6 +50,11 @@ inhibit_rules:
     target_matchers: [severity=~"warning|info"]
     equal: [service]
 
+  # 1b. worker 가 죽으면 Stalled(critical) 도 같이 울린다(식이 absent 를 0 으로 보므로). 원인은 하나이니 TargetDown 만 남긴다.
+  - source_matchers: [alertname="TargetDown", service="worker"]
+    target_matchers: [alertname="BookingProcessingStalled"]
+    equal: [service]
+
   # 2. 처리 정체(critical)가 떴으면 "적체가 오래됐다"(info) 는 같은 사실의 약한 표현이다.
   - source_matchers: [alertname="BookingProcessingStalled"]
     target_matchers: [alertname="BacklogAging"]

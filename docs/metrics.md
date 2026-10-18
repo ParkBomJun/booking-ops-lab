@@ -65,13 +65,16 @@
 | 규칙 | severity | 지표 | 훈련 |
 |---|---|---|---|
 | TargetDown | critical | `up` | 4 |
-| BookingProcessingStalled | critical | `booking_status_count{parsed}` + `worker_transitions_total{from="parsed"}` | 처리 정체 |
+| BookingProcessingStalled | critical | `booking_status_count{parsed}` + `worker_transitions_total{from="parsed"}` (`or vector(0)` 로 absent 방어) | 처리 정체 |
 | ForwarderErrorRateHigh | warning | `worker_attempts_total` result 비율 | 1 |
 | ForwarderLatencyHigh | warning | `worker_forwarder_request_duration_seconds` p95 | 1 변형 |
 | FailedBookingsIncreasing | warning | `booking_status_count{failed}` delta | 1 결과 |
 | NeedsReviewRatioHigh | warning | `booking_processed_total` result 비율 | 2 |
 | HttpErrorRateHigh | warning | `booking_http_requests_total` 5xx 비율 | 일반 |
 | BacklogAging / VersionConflictsObserved / ConfigAdjusted / NeedsReviewBacklog | info | `worker_oldest_eligible_age_seconds` / `worker_version_conflicts_total` / `booking_needs_review_count` | 선행·기록 |
+
+## Counter 기반 "0 이면 이상" 규칙의 함정
+`rate(counter[5m]) == 0` 은 시계열이 **있을 때만** 0 을 돌려준다. 프로세스가 재시작돼 해당 라벨 조합이 한 번도 증가하지 않았으면 시계열이 없고, `and` 로 묶인 식 전체가 빈 벡터가 되어 알림이 평가되지 않는다. 방어 두 가지를 같이 쓴다: 규칙 쪽 `(... or vector(0)) == 0`, 앱 쪽 시작 시 `WithLabelValues(...).Add(0)` 선등록. 실제로 놓친 사례: `docs/postmortems/2026-10-18-alert-empty-vector.md`.
 
 ## 로컬 접속
 - Prometheus: http://localhost:9090 (Status → Targets에서 booking-api up 확인)

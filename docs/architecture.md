@@ -24,6 +24,8 @@
 | `needs_review` | `parsed` | 사람 (미구현) |
 | `confirmed`, `failed` | 없음 (종결) | |
 
+worker 는 시작 시 이 표의 모든 (from,to) 조합을 `worker_transitions_total` 에 0 으로 선등록한다. Counter 는 첫 증가 전에는 시계열이 없어 "전이 0 건" 과 "지표 없음" 이 구분되지 않고, 그러면 정체 알림이 재시작 직후에는 평가조차 되지 않기 때문이다(`docs/postmortems/2026-10-18-alert-empty-vector.md`).
+
 표 밖의 전이는 worker 가 거부하고 `worker_transition_rejected_total{from,to}` 로 센다. 포워더가 `OUT_OF_ORDER` 로 `confirmed` 뒤에 `pending` 을 돌려줘도 `confirmed → sent` 는 표에 없어 버려진다. 코드: `services/worker/store.go` 의 `allowedTransitions`.
 
 ## worker 가 행을 집어가는 방법 (claim)

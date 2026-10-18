@@ -329,6 +329,7 @@ func main() {
 		fwd:   NewForwarder(mustEnv("FORWARDER_URL"), cfg.httpTimeout),
 	}
 	prometheus.MustRegister(newBacklogCollector(pool))
+	preRegisterTransitions() // "없음" 과 "0" 을 구분하기 위해 전이 지표를 0 으로 선등록
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", w.healthz(pool))

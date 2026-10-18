@@ -20,14 +20,17 @@ groups:
     rules:
       # 처리량 정체: parsed 행이 있는데 5분간 parsed 에서 나간 전이가 한 건도 없다.
       # 포워더 장애는 여기 안 걸린다 — 재시도 끝에 sent 나 failed 전이가 생기기 때문. (그건 warning 몫)
-      # worker 가 완전히 죽으면 rate 가 absent 라 `and` 가 빈 결과 -> 울리지 않음. 그 경우는 TargetDown 이 잡는다.
+      # `or vector(0)`: 전이 시계열이 "없음(absent)" 이어도 0 으로 취급한다. 없었던 과거 버전은 새 프로세스(재시작 직후)가
+      # 전이를 한 번도 못 하면 시계열 자체가 없어 `and` 가 빈 결과가 됐고, 라이브락 재현에서 12분간 울리지 않았다
+      # (docs/postmortems/2026-10-18-alert-empty-vector.md). worker 가 죽어도 이제 울리므로 Alertmanager 에서
+      # TargetDown{service=worker} 가 이 알림을 억제한다.
       # `and on()`: 두 벡터의 라벨(status / from,to)이 달라 라벨 매칭 없이 "둘 다 참" 만 본다.
       # 백오프 최대 누적이 ~31s 이므로 5분 윈도우는 보수적. for 2m 은 윈도우 경계 플래핑 방지. 총 약 7분.
       - alert: BookingProcessingStalled
         expr: |
           max(booking_status_count{status="parsed"}) > 0
           and on()
-          sum(rate(worker_transitions_total{from="parsed"}[5m])) == 0
+          (sum(rate(worker_transitions_total{from="parsed"}[5m])) or vector(0)) == 0
         for: 2m
         labels:
           severity: critical

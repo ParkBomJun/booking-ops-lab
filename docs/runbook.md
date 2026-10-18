@@ -16,6 +16,7 @@ source 가 firing 인 동안 같은 `service` 의 target 은 발송되지 않는
 | # | source (살아 있으면) | target (숨겨짐) | 이유 |
 |---|---|---|---|
 | 1 | `TargetDown` | 같은 service 의 모든 warning / info | 서비스가 죽었는데 "에러율 높음" 은 의미 없다 |
+| 1b | `TargetDown{service=worker}` | `BookingProcessingStalled` | Stalled 식이 "지표 없음" 도 0 으로 보므로 worker 가 죽으면 둘 다 울린다. 원인은 하나 |
 | 2 | `BookingProcessingStalled` | `BacklogAging` | 같은 사실의 약한 표현 |
 | 3 | 모든 critical | 같은 service 의 모든 info | 1·2 가 못 덮는 조합의 안전망 |
 
@@ -28,7 +29,7 @@ source 가 firing 인 동안 같은 `service` 의 target 은 발송되지 않는
 - **해제**: `up == 1` 복귀. resolved 알림 수신.
 
 ## BookingProcessingStalled
-- **의미**: parsed 행이 있는데 5분 이상 parsed 에서 나간 전이가 0건. worker 가 집어가지 못하거나 쓰지 못한다.
+- **의미**: parsed 행이 있는데 5분 이상 parsed 에서 나간 전이가 0건(전이 지표가 아예 없어도 0 으로 본다). worker 가 집어가지 못하거나 쓰지 못한다. 임대 라이브락, 폴러 정지, DB claim 실패, 재시작 직후 정체 모두 여기 걸린다.
 - **먼저 볼 것**: worker `/healthz` 의 `poller`(stale 이면 폴러 멈춤), worker 로그의 `claim failed`, `worker_version_conflicts_total` 증가 여부(임대 라이브락), `worker_backlog_count{status="parsed"}`.
 - **조치**: 폴러 stale → worker 재시작. claim failed → DB 연결·마이그레이션 002 적용 여부. 충돌 폭증 → `WORKER_LEASE_MS` 가 `WORKER_HTTP_TIMEOUT_MS` 의 2배 이상인지.
 - **해제**: `rate(worker_transitions_total{from="parsed"}[5m]) > 0`.
