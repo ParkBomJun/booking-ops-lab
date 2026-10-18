@@ -1,0 +1,177 @@
+# Prometheus 알림 규칙. 설계: docs/runbook.md 의 각 항목과 1:1.
+# 심각도: critical = 지금 사람이 봐야 함 / warning = 품질 저하, 수십 분 내 확인 / info = 기록용, Alertmanager UI 에서만.
+# for 는 스크레이프(15s) 2~3회보다 길게 둔다. 한 번의 튀는 값으로 울리지 않게 하기 위함.
+groups:
+  - name: availability
+    rules:
+      # 훈련 4번: 잘못된 배포 -> /healthz 실패 -> 컨테이너 재시작 반복 -> 스크레이프 실패.
+      # 재시작 1회(수 초)는 무시하고 1분 내리 죽어 있으면 배포 실패로 본다.
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} 스크레이프 실패"
+          description: "{{ $labels.instance }} 가 1분 이상 응답하지 않습니다."
+          runbook: "docs/runbook.md#targetdown"
+
+  - name: worker
+    rules:
+      # 처리량 정체: parsed 행이 있는데 5분간 parsed 에서 나간 전이가 한 건도 없다.
+      # 포워더 장애는 여기 안 걸린다 — 재시도 끝에 sent 나 failed 전이가 생기기 때문. (그건 warning 몫)
+      # worker 가 완전히 죽으면 rate 가 absent 라 `and` 가 빈 결과 -> 울리지 않음. 그 경우는 TargetDown 이 잡는다.
+      # `and on()`: 두 벡터의 라벨(status / from,to)이 달라 라벨 매칭 없이 "둘 다 참" 만 본다.
+      # 백오프 최대 누적이 ~31s 이므로 5분 윈도우는 보수적. for 2m 은 윈도우 경계 플래핑 방지. 총 약 7분.
+      - alert: BookingProcessingStalled
+        expr: |
+          max(booking_status_count{status="parsed"}) > 0
+          and on()
+          sum(rate(worker_transitions_total{from="parsed"}[5m])) == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: "부킹 처리 정체"
+          description: "parsed 상태 {{ $value }} 건이 5분 이상 처리되지 않고 있습니다. worker 폴러·DB claim·임대 설정을 확인하세요."
+          runbook: "docs/runbook.md#bookingprocessingstalled"
+
+      # 훈련 1번: 포워더 실패율 50%. 정상은 0 근처, 0.2 는 블립 여유, 훈련값 0.5 는 1분 안에 넘는다.
+      # pending 은 정상 대기이므로 실패에서 제외. 분모 > 0 조건으로 트래픽 0 일 때 0/0 을 막는다.
+      - alert: ForwarderErrorRateHigh
+        expr: |
+          (
+            sum(rate(worker_attempts_total{result!~"ok|duplicate|pending"}[5m]))
+            /
+            sum(rate(worker_attempts_total[5m]))
+          ) > 0.2
+          and on() sum(rate(worker_attempts_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "포워더 호출 실패율 {{ $value | humanizePercentage }}"
+          description: "최근 5분 포워더 호출의 20% 이상이 실패(timeout/5xx/conn_error)입니다."
+          runbook: "docs/runbook.md#forwardererrorratehigh"
+
+      # 1번 변형(DELAY_MS): 에러는 아직 없지만 느려지는 "조용한 악화". 타임아웃 3s 직전 구간.
+      - alert: ForwarderLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(worker_forwarder_request_duration_seconds_bucket[5m]))) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "포워더 p95 지연 {{ $value | humanizeDuration }}"
+          description: "포워더 응답 p95 가 10분 이상 2초를 넘습니다. 타임아웃(3s) 폭증의 선행 신호입니다."
+          runbook: "docs/runbook.md#forwarderlatencyhigh"
+
+      # 1번 결과: 최대 재시도 초과로 실패함에 쌓임. 사람이 처리해야 하는 적체. 15분에 3건 초과면 산발이 아닌 패턴.
+      # Gauge 라 increase 가 아니라 delta 를 쓴다.
+      - alert: FailedBookingsIncreasing
+        expr: delta(booking_status_count{status="failed"}[15m]) > 3
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "실패함 15분간 {{ $value }} 건 증가"
+          description: "최대 재시도를 초과한 부킹이 늘고 있습니다. last_error 컬럼으로 원인을 확인하세요."
+          runbook: "docs/runbook.md#failedbookingsincreasing"
+
+      # info: Stalled 의 선행 신호. 처리는 되지만 따라가지 못함.
+      - alert: BacklogAging
+        expr: worker_oldest_eligible_age_seconds > 120
+        for: 5m
+        labels:
+          severity: info
+          service: worker
+        annotations:
+          summary: "가장 오래 기다린 부킹 {{ $value | humanizeDuration }}"
+          runbook: "docs/runbook.md#backlogaging"
+
+      # info: 시작 시 설정이 불변식을 어겨 자동 보정됨 (예: WORKER_LEASE_MS < 2×WORKER_HTTP_TIMEOUT_MS).
+      # 서비스는 정상 동작하므로 info. 로그의 WARN 한 줄을 놓쳐도 여기서 드러난다. 설정을 고쳐 재기동하면 0 으로 해제.
+      - alert: ConfigAdjusted
+        expr: worker_config_adjusted == 1
+        for: 1m
+        labels:
+          severity: info
+          service: worker
+        annotations:
+          summary: "worker 설정 자동 보정: {{ $labels.setting }}"
+          description: "시작 시 {{ $labels.setting }} 가 불변식을 어겨 안전한 값으로 올려졌습니다. worker 로그의 'too short' WARN 과 .env 를 확인하세요."
+          runbook: "docs/runbook.md#configadjusted"
+
+      # info: 정상은 0. 임대 만료 후 이중 처리 또는 수동 조작이 있었다는 기록.
+      - alert: VersionConflictsObserved
+        expr: increase(worker_version_conflicts_total[15m]) > 0
+        labels:
+          severity: info
+          service: worker
+        annotations:
+          summary: "version 충돌 {{ $value }} 건 (15분)"
+          runbook: "docs/runbook.md#versionconflictsobserved"
+
+  - name: booking-api
+    rules:
+      # 훈련 2번: Claude 타임아웃. HTTP 는 201 이라 에러율로 안 보인다. 처리 결과의 절반 이상이 검토함으로 가면 파서 장애.
+      # duplicate 는 파싱을 거치지 않으므로 분모에서 제외. 원인(claude_timeout 비율)은 runbook 에서 확인.
+      - alert: NeedsReviewRatioHigh
+        expr: |
+          (
+            sum(rate(booking_processed_total{result="needs_review"}[5m]))
+            /
+            sum(rate(booking_processed_total{result=~"parsed|needs_review"}[5m]))
+          ) > 0.5
+          and on() sum(rate(booking_processed_total{result=~"parsed|needs_review"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: booking-api
+        annotations:
+          summary: "검토 대기함 유입 비율 {{ $value | humanizePercentage }}"
+          description: "신규 부킹의 절반 이상이 파싱 실패로 검토함에 들어갑니다. booking_claude_requests_total 의 result 분포를 확인하세요."
+          runbook: "docs/runbook.md#needsreviewratiohigh"
+
+      # 일반 장애(DB 단절 등). 5% 는 실제 장애에서만 넘는 값.
+      - alert: HttpErrorRateHigh
+        expr: |
+          (
+            sum(rate(booking_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(booking_http_requests_total[5m]))
+          ) > 0.05
+          and on() sum(rate(booking_http_requests_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: booking-api
+        annotations:
+          summary: "booking-api 5xx 비율 {{ $value | humanizePercentage }}"
+          runbook: "docs/runbook.md#httperrorratehigh"
+
+      # info: 사람이 처리하지 않은 검토함 적체. 급하지 않다.
+      - alert: NeedsReviewBacklog
+        expr: booking_needs_review_count > 20
+        for: 30m
+        labels:
+          severity: info
+          service: booking-api
+        annotations:
+          summary: "검토 대기 {{ $value }} 건"
+          runbook: "docs/runbook.md#needsreviewbacklog"
+
+  # 훈련 6번 (디스크). node_exporter 를 추가하는 3단계에서 주석을 푼다.
+  # - name: host
+  #   rules:
+  #     - alert: DiskUsageHigh
+  #       expr: |
+  #         (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes) > 0.8
+  #       for: 10m
+  #       labels: { severity: critical }
+  #       annotations:
+  #         summary: "디스크 사용률 {{ $value | humanizePercentage }}"
+  #         runbook: "docs/runbook.md#diskusagehigh"

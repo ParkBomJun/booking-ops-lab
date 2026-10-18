@@ -105,6 +105,7 @@ services:
     # 설정 파일은 읽기 전용(:ro) 으로 마운트. 컨테이너가 설정을 바꿀 이유가 없다.
     volumes:
       - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - promdata:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -114,6 +115,19 @@ services:
       - "9090:9090"
     depends_on:
       - booking-api
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: booking-alertmanager
+    volumes:
+      - ./infra/monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanagerdata:/alertmanager   # silence·notification 상태 보존
+    # Discord 웹훅 URL 을 /run/secrets/discord_webhook 파일로 받는다 (아래 secrets 참고).
+    secrets:
+      - discord_webhook
+    ports:
+      - "9093:9093"   # UI: 현재 firing 알림, silence, info 등급 확인
     restart: unless-stopped
 
   grafana:
@@ -134,7 +148,15 @@ services:
       - prometheus
     restart: unless-stopped
 
+# compose secret: 환경변수 값을 파일로 만들어 컨테이너의 /run/secrets/<이름> 에 마운트한다.
+# Alertmanager 는 환경변수 치환을 지원하지 않지만 *_file 옵션은 지원하므로 이 경로를 쓴다.
+# 값은 .env 의 DISCORD_WEBHOOK_URL 에서 온다. 설정 파일에도, 이미지에도, git 에도 남지 않는다.
+secrets:
+  discord_webhook:
+    environment: DISCORD_WEBHOOK_URL
+
 volumes:
   pgdata:
+  alertmanagerdata:
   promdata:
   grafanadata:

@@ -294,10 +294,12 @@ func main() {
 	// 불변식: 임대 > HTTP 타임아웃 (+ DB 쓰기 여유). 임대가 호출보다 먼저 만료되면 매 틱마다 같은 행이 재claim 되고
 	// 모든 마무리 쓰기가 version 충돌로 버려져 행이 영원히 끝나지 않는다 (검증 중 실제로 재현된 라이브락).
 	// 잘못된 설정은 조용히 받아들이지 않고 안전한 값으로 올린 뒤 경고를 남긴다.
+	configAdjusted.WithLabelValues("lease_ms").Set(0) // 기본값 0 을 먼저 내보낸다
 	if minLease := 2 * cfg.httpTimeout; cfg.lease < minLease {
 		slog.Warn("WORKER_LEASE_MS too short for WORKER_HTTP_TIMEOUT_MS; raising",
 			"configured_ms", cfg.lease.Milliseconds(), "raised_to_ms", minLease.Milliseconds())
 		cfg.lease = minLease
+		configAdjusted.WithLabelValues("lease_ms").Set(1) // 로그 + 지표. 알림 규칙 ConfigAdjusted 가 이 값을 본다
 	}
 	slog.Info("worker config", "poll_ms", cfg.pollInterval.Milliseconds(), "concurrency", cfg.concurrency,
 		"http_timeout_ms", cfg.httpTimeout.Milliseconds(), "max_attempts", cfg.maxAttempts,

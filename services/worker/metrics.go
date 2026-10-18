@@ -55,6 +55,14 @@ var (
 		Name: "worker_inflight",
 		Help: "Bookings currently being processed by a worker goroutine.",
 	})
+
+	// 10. 시작 시 설정이 자동 보정됐는가. 1 이면 로그의 WARN 을 놓쳤어도 알림(ConfigAdjusted, info)으로 드러난다.
+	// 라벨 setting 은 보정된 항목 이름. 지금은 lease_ms 하나지만 다른 검사가 생기면 같은 Gauge 를 쓴다.
+	// 정상이면 0 을 명시적으로 내보내 "지표 없음" 과 "보정 없음" 을 구분한다.
+	configAdjusted = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "worker_config_adjusted",
+		Help: "1 if a startup setting was automatically corrected because it violated an invariant.",
+	}, []string{"setting"})
 )
 
 // ---- 8·9. 적체 지표: 스크레이프 시점에 DB 조회 (booking-api 의 dbCollector 와 같은 방식) ----

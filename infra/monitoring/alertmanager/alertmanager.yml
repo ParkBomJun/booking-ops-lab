@@ -1,0 +1,61 @@
+# Alertmanager: Prometheus 가 보낸 알림을 "묶고(group) → 억제하고(inhibit) → 라우팅해서(route) → 보낸다(receiver)".
+global:
+  # firing 이 멈춘 뒤 이 시간이 지나면 resolved 로 간주. Prometheus 는 보통 resolved 를 명시적으로 보내므로 안전망.
+  resolve_timeout: 5m
+
+route:
+  # 같은 alertname + service 는 한 메시지로 묶는다. 인스턴스마다 따로 오지 않는다.
+  group_by: [alertname, service]
+  # 기본값(아무 하위 라우트에도 안 걸린 알림)은 warning 수준으로 다룬다.
+  receiver: discord-ops
+  group_wait: 2m        # 첫 알림 후 같은 그룹의 다른 알림을 이만큼 더 모았다가 한 번에 보낸다
+  group_interval: 10m   # 이미 보낸 그룹에 새 알림이 추가되면 이 간격으로만 갱신 발송
+  repeat_interval: 4h   # 해결 안 된 알림을 다시 상기시키는 주기
+
+  routes:
+    # critical: 빨리, 자주. 30초만 모으고 1시간마다 상기.
+    - matchers: [severity="critical"]
+      receiver: discord-ops
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+
+    # info: Discord 로 보내지 않는다. Alertmanager UI(localhost:9093) 에서만 본다.
+    # receiver 를 빈 수신자로 두는 것이 "버린다" 의 표준 표현. 라우트에서 빼면 기본 receiver 로 가버린다.
+    - matchers: [severity="info"]
+      receiver: "null"
+      repeat_interval: 24h
+
+receivers:
+  - name: discord-ops
+    discord_configs:
+      # 웹훅 URL 은 비밀값. 설정 파일에 쓰지 않고 compose secret 으로 마운트된 파일에서 읽는다.
+      - webhook_url_file: /run/secrets/discord_webhook
+        send_resolved: true   # 해결 알림도 보낸다 (critical/warning 만 여기 오므로 info 는 해당 없음)
+        title: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+        message: |-
+          {{ range .Alerts -}}
+          **{{ .Annotations.summary }}**
+          {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+          service: {{ .Labels.service }}{{ if .Labels.instance }} · {{ .Labels.instance }}{{ end }}
+          runbook: {{ .Annotations.runbook }}
+          {{ end }}
+
+  - name: "null"   # 아무 데도 보내지 않는 수신자
+
+# 억제 규칙: source 가 firing 이면 equal 라벨이 같은 target 을 보내지 않는다. 장애 하나에 메시지 하나.
+inhibit_rules:
+  # 1. 서비스가 죽었으면(TargetDown) 그 서비스의 warning/info 는 전부 의미가 없다.
+  - source_matchers: [alertname="TargetDown"]
+    target_matchers: [severity=~"warning|info"]
+    equal: [service]
+
+  # 2. 처리 정체(critical)가 떴으면 "적체가 오래됐다"(info) 는 같은 사실의 약한 표현이다.
+  - source_matchers: [alertname="BookingProcessingStalled"]
+    target_matchers: [alertname="BacklogAging"]
+    equal: [service]
+
+  # 3. 일반 규칙: 같은 서비스에 critical 이 있으면 info 는 숨긴다. (1·2 가 못 덮는 조합의 안전망)
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="info"]
+    equal: [service]

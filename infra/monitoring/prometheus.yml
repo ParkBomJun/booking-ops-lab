@@ -4,6 +4,16 @@ global:
   evaluation_interval: 15s  # 알림 규칙을 평가하는 주기 (2단계 Alertmanager 에서 사용)
   scrape_timeout: 10s       # 대상이 이 시간 안에 응답하지 않으면 수집 실패로 처리. scrape_interval 보다 짧아야 한다.
 
+# 알림 규칙 파일. 컨테이너 안 경로 (compose 가 :ro 로 마운트).
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+# 평가 결과(firing)를 보낼 Alertmanager. Prometheus 는 "판정" 만 하고 "누구에게 어떻게 보낼지" 는 Alertmanager 몫.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   # Prometheus 자기 자신. 수집기가 건강한지 보는 용도.
   - job_name: prometheus
@@ -40,4 +50,11 @@ scrape_configs:
       - targets: ["mock-forwarder:8082"]
         labels:
           service: mock-forwarder
+          env: local
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels:
+          service: alertmanager
           env: local

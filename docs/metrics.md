@@ -39,6 +39,7 @@
 | `worker_inflight` | Gauge | | 처리 중 건수 |
 | `worker_backlog_count` | Gauge(Collector) | status=parsed\|sent | **지금 집어갈 수 있는** 행 수. `booking_status_count` 와 달리 `next_attempt_at` 이 지난 것만 |
 | `worker_oldest_eligible_age_seconds` | Gauge(Collector) | | 가장 오래 기다린 건의 나이. 처리 지연 |
+| `worker_config_adjusted` | Gauge | setting=lease_ms | 시작 시 설정 자동 보정 여부(0/1). ConfigAdjusted(info) 알림 |
 
 실패함 건수는 기존 `booking_status_count{status="failed"}` 를 쓴다 (중복 노출 안 함).
 
@@ -58,7 +59,22 @@
 | 3. 중복 전송 | 3번 duplicate 증가, 4번 변화 없음 | DB 행 수 불변 |
 | 4. 잘못된 배포 | /healthz 실패 (CD) | 1번 5xx 비율 |
 
+## 알림 규칙 ↔ 지표
+규칙 파일 `infra/monitoring/alert-rules.yml`, 대응 절차 `docs/runbook.md`.
+
+| 규칙 | severity | 지표 | 훈련 |
+|---|---|---|---|
+| TargetDown | critical | `up` | 4 |
+| BookingProcessingStalled | critical | `booking_status_count{parsed}` + `worker_transitions_total{from="parsed"}` | 처리 정체 |
+| ForwarderErrorRateHigh | warning | `worker_attempts_total` result 비율 | 1 |
+| ForwarderLatencyHigh | warning | `worker_forwarder_request_duration_seconds` p95 | 1 변형 |
+| FailedBookingsIncreasing | warning | `booking_status_count{failed}` delta | 1 결과 |
+| NeedsReviewRatioHigh | warning | `booking_processed_total` result 비율 | 2 |
+| HttpErrorRateHigh | warning | `booking_http_requests_total` 5xx 비율 | 일반 |
+| BacklogAging / VersionConflictsObserved / ConfigAdjusted / NeedsReviewBacklog | info | `worker_oldest_eligible_age_seconds` / `worker_version_conflicts_total` / `booking_needs_review_count` | 선행·기록 |
+
 ## 로컬 접속
 - Prometheus: http://localhost:9090 (Status → Targets에서 booking-api up 확인)
+- Alertmanager: http://localhost:9093 (firing 알림, inhibited 표시, silence, info 등급은 여기서만)
 - Grafana: http://localhost:3000 (admin / `.env`의 `GRAFANA_ADMIN_PASSWORD`) → Booking Ops 폴더 → "Booking API — 서비스 지표"
 - 장애 재현: `CLAUDE_TIMEOUT_MS=1 docker compose up -d booking-api` 후 요청 몇 건 → 3번·5번 패널이 튄다

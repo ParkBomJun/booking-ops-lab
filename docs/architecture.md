@@ -8,7 +8,7 @@
                                                               │                     (FAIL_RATE, DELAY_MS,
                                    /metrics ◀── Prometheus ──▶ /metrics             DUP_RATE, OUT_OF_ORDER)
                                                   │
-                                               Grafana
+                                               Grafana        Prometheus ──rules──▶ Alertmanager ──▶ Discord
 ```
 
 - worker 와 booking-api 는 서로 통신하지 않는다. **DB 가 큐 역할**을 한다. worker 가 죽어도 요청은 DB 에 남는다.
@@ -89,4 +89,5 @@ in-memory map + 뮤텍스(net/http 는 요청마다 goroutine 을 띄우므로 m
 | worker | 8081 |
 | mock-forwarder | 8082 |
 | Prometheus | 9090 |
+| Alertmanager | 9093 |
 | Grafana | 3000 |

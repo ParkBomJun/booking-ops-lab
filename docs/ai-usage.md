@@ -126,3 +126,30 @@
 | 종료 중 4건 in-flight, `compose stop` | 4건 모두 `transition applied` 후 "all workers drained" → "worker stopped". claimed_until 전부 NULL |
 | 처리 중 수동 version+1 | "version conflict, result discarded" (expected 2 / actual 3), 덮어쓰기 없음, 다음 폴링에서 재처리 → confirmed (version 7) |
 | 임대 1s 설정 | 경고 후 6000ms 로 상향 |
+
+## 2026-10-18 — 2단계: Alertmanager 알림 규칙
+
+### 한 일
+- 설계 합의 후 규칙 10개(`infra/monitoring/alert-rules.yml`): critical 2(TargetDown, BookingProcessingStalled), warning 5, info 3. 디스크 규칙은 node_exporter 도입 때까지 주석.
+- Alertmanager v0.28.1: severity 별 라우팅(critical 30s/1h, warning 2m/4h, info 는 `null` 수신자로 UI 전용), inhibition 3개, Discord 내장 통합(`webhook_url_file`). 웹훅 URL 은 compose `secrets`(environment 소스)로 `/run/secrets/` 파일 마운트 — 설정 파일·이미지·git 어디에도 안 남는다.
+- `docs/runbook.md` 신설: 알림별 의미 → 먼저 볼 것 → 조치 → 해제 조건, 억제 표, silence 사용법.
+
+### 설계 메모 (면접 대비)
+- "처리 정체" 를 `parsed 가 줄지 않음` 이 아니라 `parsed 에서 나가는 전이가 0` 으로 정의했다. 전자는 유입이 계속되면 처리 중에도 울리고, 후자는 포워더 장애(결국 failed 전이 발생)와 worker 정지를 구분한다.
+- 비율 규칙은 전부 `and on() 분모 > 0` 을 붙였다. 트래픽 0 일 때 0/0 = NaN 으로 규칙이 이상 동작하는 것을 막는다.
+- 재시도 횟수 알림은 의도적으로 뺐다. ErrorRate 와 같은 원인을 두 번 알리면 알림 피로만 늘린다.
+
+### AI 실수와 수정
+- `amtool alert add` 로 테스트 알림을 보낼 때 한국어 annotation 을 따옴표 없이 넘겨 파서 경고가 났다(UTF-8 매처 파서는 값에 따옴표 필요). 알림 자체는 등록되어 Discord 발송은 성공(`alertmanager_notifications_total{integration="discord"}`=1, failed=0). 교훈: 발송 성공 여부는 로그가 아니라 **Alertmanager 자체 지표**로 확인한다(성공은 INFO 로그에 안 남는다).
+- **장애 미주입(2번째)**: `.env` 가 줄바꿈 없이 끝나 있어서, `cat .env; printf 'FWD_FAIL_RATE=0.5\n'` 로 만든 override 파일에서 새 변수가 마지막 줄(웹훅 URL) 뒤에 붙어 무시됐다. 11분 훈련 동안 `worker_attempts_total` 이 전부 `ok` 인 것으로 발견. `.env` 끝에 줄바꿈을 보장(`sed -i -e '$a\'`)하고 재실행. 교훈: 설정 파일을 이어 붙일 때는 **합친 결과를 `compose config` 로 먼저 확인**한다 — 이번엔 `FAIL_RATE: "0"` 이 그대로 보였다.
+
+### 검증 결과 (알림)
+| 항목 | 결과 |
+|---|---|
+| `promtool check rules` / `amtool check-config` | 10 rules, 3 inhibit rules, 2 receivers 통과 |
+| Prometheus → Alertmanager | activeAlertmanagers 1, 규칙 3그룹 로드 |
+| amtool 테스트 알림 | Discord 발송 1 / 실패 0 |
+| 훈련 1번 재현 (FAIL_RATE 0.5, 20초마다 5건, 11분) | 포워더 `injected_fail`=174. 약 7분 뒤 `ForwarderErrorRateHigh`(비율 0.30) firing, 30초 뒤 `FailedBookingsIncreasing` firing(50%에서 5연속 실패 확률 3% × 170건 ≈ 5건). Discord 발송 누계 5 / 실패 0 |
+| 억제 | 두 알림이 다른 사실(원인 / 결과)이라 억제 대상이 아님. `inhibitedBy` 비어 있음 — 설계 의도대로 |
+- **스크린샷 시계 어긋남**: "최근 1시간" 으로 찍은 Prometheus·Grafana 화면이 비어 있었다. 원인은 훈련 중 Docker Desktop VM 시계가 호스트(WSL/Windows)보다 약 5시간 40분 뒤처져 있었던 것 — 샘플이 02:2x UTC 로 기록됐는데 브라우저의 "지금" 은 08:0x 였다. 처음엔 Chrome 헤드리스의 가상 시간 옵션을 의심해 옵션을 바꿔가며 두 번 헛찍었다. `date -u` 를 호스트와 컨테이너에서 나란히 찍어 확인한 뒤 구간을 명시해 해결. 교훈: **그래프가 비면 쿼리보다 먼저 시계를 의심한다.** 운영에서 이건 알림 시각이 통째로 어긋나는 문제이므로, 3단계 VM 에서는 시간 동기화(chrony) 점검을 healthcheck.sh 에 넣는다.
+- **설정 자동 보정의 가시성**: 임대 하한 보정이 로그 WARN 한 줄에만 남아 알림으로 이어지지 않았다. `worker_config_adjusted{setting}` Gauge(정상 0 명시)를 추가하고 info 규칙 `ConfigAdjusted` 를 걸었다. 위반 설정(임대 1000ms)으로 기동하면 1, 정상 설정으로 재기동하면 0 으로 돌아오는 것을 확인.
