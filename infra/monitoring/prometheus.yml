@@ -23,3 +23,21 @@ scrape_configs:
         labels:
           service: booking-api
           env: local
+
+  - job_name: worker
+    metrics_path: /metrics
+    sample_limit: 1000
+    static_configs:
+      - targets: ["worker:8081"]
+        labels:
+          service: worker
+          env: local
+
+  - job_name: mock-forwarder
+    metrics_path: /metrics
+    sample_limit: 1000
+    static_configs:
+      - targets: ["mock-forwarder:8082"]
+        labels:
+          service: mock-forwarder
+          env: local

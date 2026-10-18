@@ -104,3 +104,25 @@
 | Claude 지표 | 실제 호출 1건: ok=1, input 336 / output 89 토큰, 1.31s |
 | 로그 `booking_id` | stage 포함 로그 3/3 줄에 존재 |
 | Grafana | 대시보드 자동 로드 확인 (http://localhost:3000/d/booking-api) |
+
+## 2026-10-18 — 2단계: mock-forwarder + worker
+
+### 한 일
+- 구현 전 설계 문서로 합의: DB 가 큐, claim 은 `FOR UPDATE SKIP LOCKED` + 임대(`claimed_until`), 백오프는 `next_attempt_at` 컬럼에 저장, 모든 쓰기는 `WHERE version = $expected` 낙관적 잠금, 상태 전이 표로 역행 차단. 결정 사항: 4xx 즉시 failed, 409/200 은 성공, `DUP_RATE` 는 "저장 후 500(응답 유실)", 동시 처리 4.
+- 마이그레이션 002(컬럼 5개 + 부분 인덱스), `services/mock-forwarder`(장애 주입 4종), `services/worker`(폴러 1 + 처리기 N, channel, graceful shutdown), 지표 9종(`worker_`), compose·Prometheus 연결, `docs/architecture.md` 신설.
+
+### AI 실수와 수정
+- **설계 누락 → 라이브락**: 설계에 "임대 > HTTP 타임아웃" 불변식이 없었다. 검증 중 임대 1s·지연 2.5s 로 돌리자 매 틱 같은 행이 재claim 되어 모든 마무리 UPDATE 가 version 충돌(`worker_version_conflicts_total`=16)로 버려지고 행이 `parsed` 에 version 12 까지 머물렀다. 충돌 방침(덮어쓰지 않음)은 정확히 동작했으나 그 방침만으로는 진행이 보장되지 않는다. → 시작 시 `lease < 2×httpTimeout` 이면 경고 후 올리도록 수정. 교훈: **"충돌 시 어떻게 할지" 뿐 아니라 "충돌이 영원히 반복되지 않는 조건" 도 설계에 적어야 한다.**
+- **Dockerfile 복제 실수**: booking-api Dockerfile 을 sed 로 복제하면서 `COPY --from=builder /out/worker /booking-api` 처럼 목적지 경로를 놓쳤다. ENTRYPOINT `/worker` 가 없어 컨테이너가 안 떴을 것. 빌드 전 grep 검토에서 발견해 수정.
+- **검증 환경 착오(2건)**: (1) 이 WSL 배포판에는 Docker 통합이 꺼져 있어 `docker.exe` 를 직접 호출했는데, Windows 프로세스라 **WSL 셸 환경변수가 전달되지 않아** `FWD_FAIL_RATE=0.5 docker compose up` 이 장애를 주입하지 못했다. 지표에 `injected_fail` 이 0 인 것으로 알아채고 `--env-file` 로 전환. (2) 공백이 든 경로를 셸 변수에 넣어 `$PSQL` 이 깨졌다. 함수로 교체. 교훈: 장애 주입은 "주입됐다는 증거 지표(`forwarder_requests_total{outcome="injected_*"}`)" 를 먼저 확인한다.
+- **OUT_OF_ORDER 가 거부 전이를 만들지 못함**: pull 모델에서는 confirmed 가 된 뒤 다시 조회하지 않으므로, 뒤늦은 `pending` 은 "아직 대기" 로 흡수되어 `worker_transition_rejected_total` 이 0 이었다. 전이 표는 임대 만료 후 이중 처리나 수동 조작에 대한 방어선이며, 단위 테스트(`store_test.go`)로 역행 거부를 검증했다. 포스트모템 때 이 한계를 그대로 적는다.
+
+### 검증 결과
+| 시나리오 | 결과 |
+|---|---|
+| 정상 | parsed→sent→confirmed, version 1→5, 4 타깃 up |
+| FAIL_RATE 0.5, 10건 | 500 4회 → `worker_retries_total{send}`=4, 전부 confirmed, 최대 version 9 |
+| DELAY 4s (타임아웃 3s) | `result="timeout"` 5회 → failed, `last_error`="max attempts (5) exceeded at send: timeout after 3s" |
+| 종료 중 4건 in-flight, `compose stop` | 4건 모두 `transition applied` 후 "all workers drained" → "worker stopped". claimed_until 전부 NULL |
+| 처리 중 수동 version+1 | "version conflict, result discarded" (expected 2 / actual 3), 덮어쓰기 없음, 다음 폴링에서 재처리 → confirmed (version 7) |
+| 임대 1s 설정 | 경고 후 6000ms 로 상향 |

@@ -1,1 +1,5 @@
 .env
+# go build 가 패키지 디렉터리에 떨구는 바이너리
+services/booking-api/booking-api
+services/worker/worker
+services/mock-forwarder/mock-forwarder

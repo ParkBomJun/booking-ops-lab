@@ -1,4 +1,4 @@
-# 지표 설계 (booking-api)
+# 지표 설계
 
 타입 선택 기준: **Counter** = 늘어나기만 하는 값, `rate()`로 변화율을 본다 / **Gauge** = 오르내리는 현재 값 / **Histogram** = 분포, p95를 본다. Summary는 인스턴스 간 합산이 불가능해 쓰지 않는다.
 
@@ -26,9 +26,34 @@
 - 구현: 핸들러가 `slog.With("booking_id", key)`를 `context`에 넣고, parser/store는 `logFrom(ctx)`로 꺼내 쓴다.
 - 시작·마이그레이션 로그처럼 요청 밖의 줄은 `booking_id`가 없다.
 
+## worker 지표 (`worker_` 접두어)
+
+| 지표 | 타입 | 라벨 | 잡는 것 |
+|---|---|---|---|
+| `worker_attempts_total` | Counter | stage=send\|confirm, result=ok\|duplicate\|timeout\|conn_error\|http_5xx\|http_4xx\|pending | **훈련 1번 1차 감지.** result≠ok 비율. 라벨 값은 `forwarder.go` 의 `Result*` 상수 |
+| `worker_retries_total` | Counter | stage | 재시도 예약 횟수. 폭증 알림 대상 |
+| `worker_forwarder_request_duration_seconds` | Histogram | stage | 버킷 0.05~5s. 타임아웃 3s 직전 구간 구분 |
+| `worker_transitions_total` | Counter | from, to | 적용된 상태 전이 |
+| `worker_transition_rejected_total` | Counter | from, to | 역행 차단 증거 (OUT_OF_ORDER 훈련) |
+| `worker_version_conflicts_total` | Counter | | 낙관적 잠금 충돌. 0 이 정상 |
+| `worker_inflight` | Gauge | | 처리 중 건수 |
+| `worker_backlog_count` | Gauge(Collector) | status=parsed\|sent | **지금 집어갈 수 있는** 행 수. `booking_status_count` 와 달리 `next_attempt_at` 이 지난 것만 |
+| `worker_oldest_eligible_age_seconds` | Gauge(Collector) | | 가장 오래 기다린 건의 나이. 처리 지연 |
+
+실패함 건수는 기존 `booking_status_count{status="failed"}` 를 쓴다 (중복 노출 안 함).
+
+## mock-forwarder 지표 (`forwarder_` 접두어)
+- `forwarder_requests_total{route, outcome}`: outcome=ok|duplicate|injected_fail|injected_dup|not_found|bad_request. 주입한 장애가 실제로 발동했는지 증명하는 용도.
+- `forwarder_bookings_stored`: 메모리에 보관 중인 건수.
+
+## worker 로그 규칙
+- 모든 처리 로그에 `booking_id`(멱등키), `row_id`, `attempt`, `stage`(send|confirm), `result`, `duration_ms`.
+- 전이 적용 시 `from`, `to`, `version`. version 충돌 시 `expected_version`, `actual_version`, `actual_status`.
+
 ## 장애 훈련 ↔ 지표
 | 훈련 | 1차 감지 | 원인 분석 |
 |---|---|---|
+| 1. 포워더 실패율 50% | `worker_attempts_total{result!="ok"}` 비율, `worker_retries_total` 급증 | `forwarder_requests_total{outcome="injected_fail"}`, `worker_backlog_count`, `booking_status_count{status="failed"}` |
 | 2. Claude 타임아웃 | 3번 needs_review 유입 급증 | 5번 claude_timeout 비율, 6번 p95 |
 | 3. 중복 전송 | 3번 duplicate 증가, 4번 변화 없음 | DB 행 수 불변 |
 | 4. 잘못된 배포 | /healthz 실패 (CD) | 1번 5xx 비율 |

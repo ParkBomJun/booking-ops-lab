@@ -1,5 +1,5 @@
 # 로컬과 서버에서 동일하게 쓰는 전체 스택 정의.
-# 지금은 DB + API 두 개. 이후 Prometheus, Grafana, worker 등이 여기에 추가된다.
+# 구성: postgres, booking-api, mock-forwarder, worker, prometheus, grafana
 
 services:
   postgres:
@@ -49,6 +49,54 @@ services:
         condition: service_healthy
     # distroless 이미지에는 curl 이 없어 여기서 healthcheck 를 쓸 수 없다.
     # 대신 다음 단계에서 Prometheus 블랙박스/외부 healthcheck.sh 로 확인한다.
+    restart: unless-stopped
+
+  mock-forwarder:
+    # 모의 외부 포워더. 환경변수로 장애를 주입한다. 상태는 메모리에만 있어 재시작하면 비워진다.
+    build: ./services/mock-forwarder
+    image: mock-forwarder:local
+    container_name: mock-forwarder
+    environment:
+      PORT: "8082"
+      # 장애 주입 노브. 기본값은 전부 "정상". 훈련 때 .env 에서 바꾸고 `docker compose up -d mock-forwarder` 로 재적용.
+      FAIL_RATE: ${FWD_FAIL_RATE:-0}            # 0~1. 이 확률로 500 (저장 안 함)
+      DELAY_MS: ${FWD_DELAY_MS:-0}              # 응답 지연. 3000 이상이면 worker 타임아웃
+      DUP_RATE: ${FWD_DUP_RATE:-0}              # 0~1. 저장 후 500 (응답 유실) -> 재전송 멱등성 검증
+      OUT_OF_ORDER: ${FWD_OUT_OF_ORDER:-false}  # true 면 GET 이 30% 확률로 옛 상태(pending) 반환
+      CONFIRM_AFTER_MS: ${FWD_CONFIRM_AFTER_MS:-5000}
+    ports:
+      - "8082:8082"   # 로컬 디버깅용. 서버에서는 뺀다 (worker 만 내부 네트워크로 접근)
+    restart: unless-stopped
+
+  worker:
+    build: ./services/worker
+    image: worker:local
+    container_name: booking-worker
+    environment:
+      PORT: "8081"
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      FORWARDER_URL: http://mock-forwarder:8082
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-1000}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_HTTP_TIMEOUT_MS: ${WORKER_HTTP_TIMEOUT_MS:-3000}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-5}
+      WORKER_BACKOFF_BASE_MS: "1000"
+      WORKER_BACKOFF_MAX_MS: "30000"
+      WORKER_LEASE_MS: ${WORKER_LEASE_MS:-60000}
+    ports:
+      - "8081:8081"   # /healthz, /metrics 로컬 확인용
+    # DB 준비 + booking-api 가 마이그레이션(002 컬럼)을 끝낸 뒤 시작해야 한다.
+    # booking-api 에는 healthcheck 가 없어 service_started 만 기다린다. 컬럼이 아직 없으면 claim 이 실패 로그를 내고
+    # 다음 틱에 재시도하므로 (폴러는 죽지 않음) 시작 순서 경쟁은 자연 해소된다.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      booking-api:
+        condition: service_started
+      mock-forwarder:
+        condition: service_started
+    # 종료 시 SIGTERM 후 이 시간 안에 안 내려가면 SIGKILL. worker 드레인(HTTP 3s + DB 쓰기)에 충분한 여유.
+    stop_grace_period: 15s
     restart: unless-stopped
 
   prometheus:
