@@ -2,7 +2,7 @@
 
 코드: `infra/terraform/` (파일 12개). 이 문서는 그 코드의 **모든 파일·블록·인자**를 순서대로 설명한다. 면접에서 "이 줄은 왜 있나" 에 답하기 위한 문서다.
 
-**현재 상태 (2026-10-22): 코드 작성 + 정적 검증(fmt · validate · tfsec · checkov · cloud-init schema)까지 끝냈고, 아직 Azure 에 apply 하지 않았다.** 적용 절차는 4절, 검증 기록은 8절.
+**현재 상태 (2026-10-25): apply 완료 — 26 리소스(예산 1 + 20 + VM 쪽 5), koreacentral, VM `Standard_B2ls_v2`.** 적용 절차는 4절, 검증 기록은 8절(8.1 정적 검증, 8.2 실제 apply). 아직 안 돌린 것: `backup.sh` → Blob(`<확인 필요>`).
 
 ## 0. 한눈에
 
@@ -13,7 +13,7 @@
 | VNet / 서브넷 | `vnet-bookingops-lab` / `snet-bookingops-lab-app` | VM 이 들어갈 사설망 |
 | NSG (규칙 3개) | `nsg-bookingops-lab-app` | 인바운드는 내 IP → 22, 3000 두 개만 |
 | 고정 공인 IP + NIC | `pip-…-vm` / `nic-…-vm` | SSH·Grafana 접속, 아웃바운드 인터넷 |
-| Linux VM (Ubuntu 24.04, B2s) | `vm-bookingops-lab` | docker compose 로 스택 7개 실행 |
+| Linux VM (Ubuntu 24.04, `Standard_B2ls_v2`) | `vm-bookingops-lab` | docker compose 로 스택 7개 실행 (기본값 B2s 는 평가판 구독에서 용량 제한으로 거부됨, 4.9절) |
 | 자동 종료 스케줄 | (VM 에 붙음) | 매일 02:00 KST 할당 해제. 끄는 걸 잊었을 때의 안전망 |
 | Storage 계정 + `backups` 컨테이너 + 수명 주기 정책 | `stbookingopslab<접미사>` | DB 백업 보관, N일 뒤 자동 삭제 |
 | Key Vault (RBAC) | `kv-bookingops-lab-<접미사>` | 비밀값 보관. 값은 Terraform 밖에서 넣는다 |
@@ -140,19 +140,23 @@ VM 삭제 시 OS 디스크도 삭제. 기본값도 true 지만 "디스크만 남
 | `admin_username` | string | `opsadmin` | 소문자 시작, admin/root 등 금지어 제외 | Azure 가 금지어를 apply 중에 거부한다 → 미리 막음 |
 | `ssh_public_key` | string | (필수) | `ssh-rsa` 또는 `ssh-ed25519` 로 시작 | 파일 경로가 아니라 **내용**. Azure 는 RSA ≥2048, Ed25519 지원(ECDSA 불가) |
 | `my_ip_cidr` | string | (필수) | IPv4 `/32` | NSG 22·3000 허용 원천. 집 IP 바뀌면 재apply |
-| `vm_size` | string | `Standard_B2s` | `Standard_B` 로 시작 | B 시리즈 밖(D·E 등)은 비용 상한을 넘으니 거부 |
+| `vm_size` | string | `Standard_B2s` | `Standard_B` 로 시작 | B 시리즈 밖(D·E 등)은 비용 상한을 넘으니 거부. **실제 값(2026-10-25 tfvars): `Standard_B2ls_v2`** — B2s 는 평가판 구독에서 `SkuNotAvailable`(4.9절) |
 | `os_disk_size_gb` | number | 30 | 30~128 | 이미지 최소 30 |
 | `vnet_cidr` / `subnet_cidr` | string | `10.10.0.0/16` / `10.10.1.0/24` | CIDR 파싱 | |
 | `budget_amount` | number | (필수) | > 0 | **단위는 구독의 청구 통화.** 아래 설명 |
 | `budget_start_date` | string | (필수) | `YYYY-MM-01T00:00:00Z` | Azure 규칙: 달의 1일, 이번 달이거나 미래 12개월 이내 |
 | `alert_emails` | list(string) | (필수) | 1개 이상, 이메일 형식 | 예산·자동 종료 알림 수신 |
 | `github_repository` | string | `ParkBomJun/booking-ops-lab` | `owner/repo` | OIDC subject 에 들어감. 틀리면 GitHub 로그인 거부 |
+| `github_owner_id` | number | `null` | | GitHub 소유자(사용자/조직)의 숫자 ID. `github_repository_id` 와 함께 주면 OIDC subject 에 강화 형식(`owner@id/repo@id`)을 쓴다. 저장소 이름이 바뀌거나 삭제 후 같은 이름으로 재생성돼도 다른 신원으로 취급돼 안전하다. 값: `GET https://api.github.com/users/<owner>` 의 `id`. **새 저장소는 이 형식이 필수** — 없으면 `AADSTS700213`(4.9절) |
+| `github_repository_id` | number | `null` | | GitHub 저장소의 숫자 ID. 값: `GET https://api.github.com/repos/<owner>/<repo>` 의 `id` |
 | `github_environment` | string | `production` | 1~64자 | `cd.yml` 의 `environment: production` 과 같아야 함 |
 | `backup_retention_days` | number | 14 | 1~365 | Blob 수명 주기 |
 | `auto_shutdown_enabled` / `auto_shutdown_time` | bool / string | true / `0200` | HHmm | 자동 종료 |
 | `tags` | map(string) | {} | | 공통 태그에 merge |
 
 **왜 `vm_size` 기본이 B2s 인가.** 스택이 컨테이너 7개(Postgres, Go 3개, Prometheus, Alertmanager, Grafana)다. 로컬 측정에서 유휴 메모리 합이 1 GiB 를 넘으므로 B1s(1 GiB)는 스왑으로 버티다 OOM 이 난다. B2s 는 2 vCPU · 4 GiB 로 여유가 있고, 버스트형이라 평소 CPU 가 낮은 이 워크로드에 가장 싸다. ARM(B2pts_v2 등)은 더 싸지만 이미지를 multi-arch 로 빌드해야 해서 뺐다.
+
+**실제로는 B2ls_v2 를 썼다(2026-10-25).** 평가판 구독에서 `Standard_B2s` 가 `SkuNotAvailable`(409) 로 거부돼, `az vm list-skus` 로 제한 없는 크기를 골라 tfvars 에 `vm_size = "Standard_B2ls_v2"`(2 vCPU · 4 GiB · x64, B2s 동급)를 지정했다. 코드의 기본값은 그대로다. 상세는 4.9절.
 
 **왜 `budget_amount` 에 통화가 없나.** Azure 예산 API 는 금액만 받고 통화는 구독의 청구 통화를 따른다. 한국 계정은 보통 KRW 이지만 일부 구독은 USD 다. 포털 **Cost Management > Budgets** 에서 통화를 확인하고 적는다. KRW 구독에 `30000` 은 3만 원, USD 구독에 `30000` 은 3만 달러가 되니 반드시 확인.
 
@@ -562,6 +566,8 @@ resource "azurerm_role_assignment" "cd_vm_contributor" {
 
 전제: Azure 구독의 **Owner**(역할 할당에 필요), 테넌트에서 앱 등록 생성 가능(개인 테넌트 기본값), 로컬에 `az`·`terraform`(1.9+)·`ssh-keygen`. 모든 명령은 `infra/terraform/` 에서.
 
+**설계가 가정하는 것(2026-10-25 첫 apply 에서 드러남).** ① GitHub 저장소 `ParkBomJun/booking-ops-lab` 이 **Public** — cloud-init 의 `git clone` 과 `deploy.sh` 의 `git fetch/checkout` 이 인증 없이 돈다. ② GHCR 패키지 3개가 **Public** — VM 의 `compose pull` 이 `docker login` 없이 받는다. 저장소 공개와는 **별개 설정**이다. 첫 apply 때 저장소가 비공개여서 cloud-init 이 실패했다(4.9절). 둘 다 비공개로 가려면 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰는 설계가 필요하다 — 개선 과제(7절 12번)로만 둔다.
+
 ### 4.1 준비
 
 ```bash
@@ -569,6 +575,7 @@ az login
 az account list -o table                      # 구독이 여러 개면
 az account set --subscription <구독 ID>
 az account show --query '{name:name,id:id,tenant:tenantId}' -o table
+az provider register -n Microsoft.Consumption && az provider register -n Microsoft.DevTestLab   # 리소스 공급자 미리 등록(2~3분). 새 구독은 미등록 상태라 안 하면 4.2·4.3 에서 MissingSubscriptionRegistration (4.9절)
 ssh-keygen -t ed25519 -f ~/.ssh/booking-ops-lab -C "ops@example.com"   # 전용 키. 비밀키는 PC 밖으로 안 나간다
 curl -4 -s ifconfig.me                        # 내 공인 IP
 cp terraform.tfvars.example terraform.tfvars  # 채운다: subscription_id, unique_suffix, ssh_public_key(= cat ~/.ssh/booking-ops-lab.pub), my_ip_cidr, budget_amount, budget_start_date(이번 달 1일), alert_emails
@@ -650,7 +657,7 @@ ls -l /opt/booking-ops-lab/.env            # -rw------- 여야 한다
 | secret | `AZURE_SUBSCRIPTION_ID` | `terraform output -raw github_secret_AZURE_SUBSCRIPTION_ID` |
 | variable | `AZURE_RESOURCE_GROUP` | `terraform output -raw resource_group_name` |
 | variable | `AZURE_VM_NAME` | `terraform output -raw vm_name` |
-| environment | `production` | Settings > Environments 에서 생성. 보호 규칙(승인자)은 선택 |
+| environment | `production` | **첫 CD 실행 때 워크플로가 자동 생성한다**(`environment: production` 인 job). 수동 생성 불필요 — 2026-10-25 확인. 보호 규칙(승인자)만 선택 |
 
 세 ID 는 엄밀히 비밀이 아니지만 secrets 에 두면 로그에서 마스킹된다. **비밀키(client secret)는 없다** — 페더레이션 자격 증명이 대신한다.
 
@@ -691,6 +698,11 @@ destroy 뒤 `az group list -o table` 로 남은 그룹을 확인한다(`NetworkW
 | `cloud-init status` 가 `error` | apt 저장소·네트워크 | `/var/log/cloud-init-output.log`. 대개 재부팅이 아니라 `sudo cloud-init clean && sudo reboot` 로 재실행 |
 | Key Vault "이름이 soft-deleted 상태" | 이전 destroy 가 purge 못 함 | `az keyvault purge --name <kv>` 후 apply |
 | apply 가 Trusted Launch 미지원 | 크기·이미지 조합 | `secure_boot_enabled`/`vtpm_enabled` false |
+| `SkuNotAvailable: ... Standard_B2s ... not available in location 'KoreaCentral'` (409) — **2026-10-25 실제** | 평가판 구독의 용량 제한. 지역 문제 아님 | ``az vm list-skus -l koreacentral --size Standard_B --query "[?length(restrictions)==\`0\`].name" -o tsv`` 로 가능한 크기 확인 → tfvars `vm_size = "Standard_B2ls_v2"` (2 vCPU·4 GiB·x64, B2s 동급). 이름에 `p` 가 든 것은 ARM 이라 amd64 이미지가 안 돈다. 이미 만든 20개 리소스는 state 에 있어 VM 부터 이어서 apply 됨(`5 to add, 0 destroy`) |
+| `cloud-init status` → `error`, 로그에 `Cloning into '/opt/booking-ops-lab'... fatal: could not read Username for 'https://github.com'` — **2026-10-25 실제** | **저장소가 비공개.** cloud-init 의 `git clone` 은 인증이 없다. 설계가 공개 저장소를 전제하는데 문서에 명시돼 있지 않았다(4절 머리에 추가) | 저장소를 Public 으로 전환. 전환 전 `git log -p --all \| grep -E 'sk-ant-\|discord.com/api/webhooks'` 로 이력에 비밀값 없음을 확인(`.env.example` 의 자리표시자만 발견) → VM 에서 `sudo cloud-init clean --logs && sudo reboot` → `status: done` (23.7초) |
+| 재부팅 후 `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` — **2026-10-25 실제** | `cloud-init clean` 이 인스턴스를 새것으로 취급해 SSH 호스트 키를 재생성 | `ssh-keygen -R <fqdn>` 후 재접속. 공격 아님 |
+| VM 에서 `docker manifest inspect ghcr.io/parkbomjun/...` → `unauthorized` — **2026-10-25 실제** | GitHub Actions 가 올린 GHCR 패키지는 기본 **비공개**. `deploy.sh` 는 의도적으로 `docker login` 을 하지 않는다 | 패키지 3개를 각각 Package settings → Change visibility → Public (저장소 공개와 **별개 설정**). 이미지에 비밀값은 없다(런타임 `.env` 에서만) |
+| `azure/login`: `AADSTS700213: No matching federated identity record found for presented assertion subject 'repo:ParkBomJun@139955781/booking-ops-lab@1423225568:environment:production'` — **2026-10-25 실제** | GitHub 가 새 저장소에 **강화 subject 형식**(`owner@<owner_id>/repo@<repo_id>`)을 쓴다. 코드는 옛 형식 `owner/repo` 전제 | 변수 `github_owner_id`, `github_repository_id` 추가 + `local.github_oidc_repo` (커밋 `2b46837`). ID 는 에러 메시지 또는 `GET https://api.github.com/users/<owner>`, `/repos/<owner>/<repo>` 의 `id`. apply 는 페더레이션 자격 증명 2개 `updated in-place` |
 
 ## 5. 보안 검토
 
@@ -767,8 +779,11 @@ terraform {
 9. **Key Vault 비밀 만료일·회전**, Defender for Cloud 평가, JIT VM 접근.
 10. **azurerm 5.x 업그레이드**: `terraform init -upgrade` 후 변경 안내서 대로 인자 교체. 잠금 파일 diff 리뷰.
 11. 사설 엔드포인트, CMK, GRS — 운영 전환 시.
+12. **비공개 저장소·GHCR 패키지 지원**(2026-10-25 추가): 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·`deploy.sh` 가 관리 ID 로 꺼내 쓰기. 지금은 둘 다 Public 전제(4절 머리).
 
-## 8. 검증 기록 (2026-10-22, 로컬 · Azure 미접속)
+## 8. 검증 기록
+
+### 8.1 로컬 정적 검증 (2026-10-22, Azure 미접속)
 
 도구는 전부 Docker 이미지로 실행했다(로컬에 terraform·tfsec 미설치, WSL 에서 `docker.exe` 사용, 저장소 경로를 `\\wsl.localhost\…` 로 마운트).
 
@@ -784,3 +799,27 @@ terraform {
 | 보안 스캔 | `bridgecrew/checkov` | 42 passed, 11 failed (전부 5.3절에서 판단) |
 | 외부 사실 확인 | 레지스트리 API, Canonical 문서, 프로바이더 문서(raw GitHub, v4.81.0 태그), Microsoft Learn | azurerm 4.x 최신 4.81.0(5.10.0 존재), azuread 3.10.0, URN `Canonical:ubuntu-24_04-lts:server`, Storage `ip_rules` /32 불가, 페더레이션 자격 증명 `application_id`, 예산 `start_date` 규칙, SSH RSA≥2048/Ed25519 |
 | 하지 않은 것 | `terraform plan`/`apply`, `az login` | 구독 접속 없이 코드만. 실제 plan 은 4.2절에서 작업자가 처음 실행한다 |
+
+### 8.2 Azure 실제 적용 (2026-10-25)
+
+환경: 평가판 구독 "Azure subscription 1"(2026-10-25 신규 가입, 구독 ID 는 `<구독 ID>` 로 가림), koreacentral, `unique_suffix = dc42`. 로컬 WSL Ubuntu 에 `az`·`terraform` 당일 설치. 4절 순서대로. 비밀값·개인 IP 는 적지 않는다.
+
+| 절 | 한 일 | 결과 |
+|---|---|---|
+| 4.1 | `az provider register` — `Microsoft.Consumption`, `Microsoft.DevTestLab` 미리 등록 | `MissingSubscriptionRegistration` 발생하지 않음 |
+| 4.2 | 예산 `-target` apply. `budget_amount=30000`, `budget_start_date=2026-10-01`, 통화 KRW | `Plan: 1 to add` → `Apply complete! Resources: 1 added`. 알림 4개(50/80/100 Actual, 100 Forecasted) |
+| 4.3 | 전체 apply 1차 | VM 에서 `SkuNotAvailable`(B2s) 실패. 그 앞 20개 리소스는 생성·state 기록 (4.9절) |
+| 4.3 | `vm_size = "Standard_B2ls_v2"` 로 재plan·apply | `5 to add, 0 destroy` → `Apply complete! Resources: 5 added`. **합계 26 리소스**(예산 1 + 20 + 5). VM 제외 약 5분, VM 약 2분 |
+| 4.3 | cloud-init | 1차 `error`(비공개 저장소 clone 실패) → 저장소 Public 전환 → `cloud-init clean --logs && reboot` → `status: done`(23.7초). 호스트 키 재생성 경고는 `ssh-keygen -R` (4.9절) |
+| 4.4 | Key Vault 비밀 4개 `setkv`(`read -rs`) — `postgres-password`, `grafana-admin-password`, `anthropic-api-key`, `discord-webhook-url` | 403 없음(역할 전파 대기 불필요). Anthropic 키·Discord 웹훅은 **등록 전에 새로 발급(로테이션)** |
+| 4.5 | VM 에서 `az login --identity --allow-no-subscriptions` → `.env` 생성 | 성공. 변수 9개, 권한 `-rw-------`, 빈 값 0 |
+| 4.6 | GitHub secrets 3개(`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`), variables 2개(`AZURE_RESOURCE_GROUP`, `AZURE_VM_NAME`) | 등록. `production` 환경은 첫 CD 실행이 자동 생성 — 수동 생성 불필요 |
+| 4.7 | `terraform output` | 정상 (FQDN `bookingops-lab-dc42.koreacentral.cloudapp.azure.com`, KV `kv-bookingops-lab-dc42`, Storage `stbookingopslabdc42`, 컨테이너 `backups`) |
+| 4.7 | `ssh` | 접속 OK |
+| 4.7 | `az vm run-command` | CD #4 의 deploy job 에서 통과(`cd.md` 11.2절) — 별도 수동 호출은 안 함 |
+| 4.7 | GHCR pull (VM) | 첫 `manifest inspect` 가 `unauthorized` → 패키지 3개 Public 전환 후 정상 (4.9절) |
+| 4.7 | OIDC (`azure/login`) | 1차 `AADSTS700213`(강화 subject 형식) → `github_owner_id`·`github_repository_id` 추가, 페더레이션 자격 증명 2개 `updated in-place`(커밋 `2b46837`) → CD #4 통과 |
+| 4.7 | Grafana `http://<fqdn>:3000` | 작업자 IP 에서 접속·로그인 OK. 데이터 소스·대시보드 프로비저닝 정상 |
+| 4.7 | `scripts/healthcheck.sh` (VM) | `RESULT: OK` — 7/7, healthz 3/3, targets 5/5, disk 19%, chrony 동기화. 상세 `cd.md` 11.2절 |
+| 4.7 | `az storage blob list`, `BACKUP_TARGET=azure scripts/backup.sh` | **아직 안 돌림** — `<확인 필요>` |
+| 4.7 | 다른 네트워크에서 ssh·:3000 타임아웃 확인 | `<확인 필요>` — 기록 없음 |
