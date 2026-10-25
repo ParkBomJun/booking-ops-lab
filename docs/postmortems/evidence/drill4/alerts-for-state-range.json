@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"ALERTS_FOR_STATE","alertname":"TargetDown","env":"local","instance":"booking-api:8080","job":"booking-api","service":"booking-api","severity":"critical"},"values":[[1792910010,"1792909999"],[1792910025,"1792909999"],[1792910040,"1792909999"],[1792910055,"1792909999"],[1792910070,"1792909999"]]}]}}
