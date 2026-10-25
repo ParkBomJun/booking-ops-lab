@@ -1,0 +1,128 @@
+2026-10-25T06:33:00Z [deploy] === deploy start: new=6bb00dc1243a7f12c72c2a28a6957717f1f4c636 current=1d951b2b25bd74b67c75b97b1dfd904a43065ede rollback_target=1d951b2b25bd74b67c75b97b1dfd904a43065ede ===
+2026-10-25T06:33:00Z [deploy] IMAGE_TAG=6bb00dc1243a7f12c72c2a28a6957717f1f4c636 written to /opt/booking-ops-lab/.env
+2026-10-25T06:33:00Z [deploy] $ compose pull --quiet
+2026-10-25T06:33:00Z    Image ghcr.io/parkbomjun/booking-ops-lab/worker:6bb00dc1243a7f12c72c2a28a6957717f1f4c636 Pulling 
+2026-10-25T06:33:00Z    Image ghcr.io/parkbomjun/booking-ops-lab/booking-api:6bb00dc1243a7f12c72c2a28a6957717f1f4c636 Pulling 
+2026-10-25T06:33:00Z    Image postgres:17-alpine Pulling 
+2026-10-25T06:33:00Z    Image ghcr.io/parkbomjun/booking-ops-lab/mock-forwarder:6bb00dc1243a7f12c72c2a28a6957717f1f4c636 Pulling 
+2026-10-25T06:33:00Z    Image prom/prometheus:v3.5.0 Pulling 
+2026-10-25T06:33:00Z    Image grafana/grafana:12.2.0 Pulling 
+2026-10-25T06:33:00Z    Image prom/alertmanager:v0.28.1 Pulling 
+2026-10-25T06:33:04Z    Image ghcr.io/parkbomjun/booking-ops-lab/worker:6bb00dc1243a7f12c72c2a28a6957717f1f4c636 Pulled 
+2026-10-25T06:33:04Z    Image ghcr.io/parkbomjun/booking-ops-lab/booking-api:6bb00dc1243a7f12c72c2a28a6957717f1f4c636 Pulled 
+2026-10-25T06:33:04Z    Image ghcr.io/parkbomjun/booking-ops-lab/mock-forwarder:6bb00dc1243a7f12c72c2a28a6957717f1f4c636 Pulled 
+2026-10-25T06:33:04Z    Image prom/alertmanager:v0.28.1 Pulled 
+2026-10-25T06:33:04Z    Image grafana/grafana:12.2.0 Pulled 
+2026-10-25T06:33:04Z    Image prom/prometheus:v3.5.0 Pulled 
+2026-10-25T06:33:04Z    Image postgres:17-alpine Pulled 
+2026-10-25T06:33:04Z [deploy] $ git_ fetch --quiet origin
+2026-10-25T06:33:05Z [deploy] $ git_ checkout --quiet --detach 6bb00dc1243a7f12c72c2a28a6957717f1f4c636
+2026-10-25T06:33:05Z [deploy] $ compose up -d --remove-orphans --quiet-pull
+2026-10-25T06:33:05Z    Container booking-prometheus Running 
+2026-10-25T06:33:05Z    Container booking-alertmanager Running 
+2026-10-25T06:33:05Z    Container booking-grafana Running 
+2026-10-25T06:33:05Z    Container booking-postgres Running 
+2026-10-25T06:33:05Z    Container mock-forwarder Recreate 
+2026-10-25T06:33:05Z    Container booking-api Recreate 
+2026-10-25T06:33:06Z    Container mock-forwarder Recreated 
+2026-10-25T06:33:06Z    Container booking-api Recreated 
+2026-10-25T06:33:06Z    Container booking-worker Recreate 
+2026-10-25T06:33:06Z    Container booking-worker Recreated 
+2026-10-25T06:33:06Z    Container mock-forwarder Starting 
+2026-10-25T06:33:06Z    Container booking-postgres Waiting 
+2026-10-25T06:33:07Z    Container mock-forwarder Started 
+2026-10-25T06:33:07Z    Container booking-postgres Healthy 
+2026-10-25T06:33:07Z    Container booking-api Starting 
+2026-10-25T06:33:07Z    Container booking-api Started 
+2026-10-25T06:33:07Z    Container booking-postgres Waiting 
+2026-10-25T06:33:08Z    Container booking-postgres Healthy 
+2026-10-25T06:33:08Z    Container booking-worker Starting 
+2026-10-25T06:33:08Z    Container booking-worker Started 
+2026-10-25T06:33:08Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:10Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:12Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:14Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:16Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:18Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:20Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:22Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:24Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:26Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:28Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:30Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:32Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:34Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:36Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:38Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:40Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:42Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:44Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:46Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:48Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:50Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:52Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:54Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:56Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:33:58Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:34:00Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:34:02Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:34:04Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:34:06Z [deploy] health http://127.0.0.1:8080/healthz -> 000
+2026-10-25T06:34:08Z [deploy] health check did not stabilize within 60s
+----- docker compose ps -----
+NAME                   IMAGE                                                                                        COMMAND                  SERVICE          CREATED              STATUS                 PORTS
+booking-alertmanager   prom/alertmanager:v0.28.1                                                                    "/bin/alertmanager -…"   alertmanager     3 hours ago          Up 3 hours             127.0.0.1:9093->9093/tcp
+booking-api            ghcr.io/parkbomjun/booking-ops-lab/booking-api:6bb00dc1243a7f12c72c2a28a6957717f1f4c636      "/booking-api"           booking-api      About a minute ago   Up About a minute      127.0.0.1:8080->8080/tcp
+booking-grafana        grafana/grafana:12.2.0                                                                       "/run.sh"                grafana          3 hours ago          Up 3 hours             0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
+booking-postgres       postgres:17-alpine                                                                           "docker-entrypoint.s…"   postgres         3 hours ago          Up 3 hours (healthy)   5432/tcp
+booking-prometheus     prom/prometheus:v3.5.0                                                                       "/bin/prometheus --c…"   prometheus       3 hours ago          Up 3 hours             127.0.0.1:9090->9090/tcp
+booking-worker         ghcr.io/parkbomjun/booking-ops-lab/worker:6bb00dc1243a7f12c72c2a28a6957717f1f4c636           "/worker"                worker           About a minute ago   Up About a minute      127.0.0.1:8081->8081/tcp
+mock-forwarder         ghcr.io/parkbomjun/booking-ops-lab/mock-forwarder:6bb00dc1243a7f12c72c2a28a6957717f1f4c636   "/mock-forwarder"        mock-forwarder   About a minute ago   Up About a minute      127.0.0.1:8082->8082/tcp
+----- last 40 log lines per app service -----
+mock-forwarder  | {"time":"2026-10-25T06:33:07.16169958Z","level":"INFO","msg":"mock-forwarder faults","fail_rate":0,"delay_ms":0,"dup_rate":0,"out_of_order":false,"confirm_after_ms":5000}
+mock-forwarder  | {"time":"2026-10-25T06:33:07.161923335Z","level":"INFO","msg":"mock-forwarder starting","addr":":8082"}
+booking-worker  | {"time":"2026-10-25T06:33:08.355180417Z","level":"INFO","msg":"worker config","poll_ms":1000,"concurrency":4,"http_timeout_ms":3000,"max_attempts":5,"backoff_base_ms":1000,"backoff_max_ms":30000,"lease_ms":60000}
+booking-api     | {"time":"2026-10-25T06:33:07.665786521Z","level":"INFO","msg":"database connected"}
+booking-api     | {"time":"2026-10-25T06:33:07.668328172Z","level":"INFO","msg":"claude configured","model":"claude-opus-5-5","timeout_ms":10000,"api_key_set":true,"workspace_id_set":false}
+booking-api     | {"time":"2026-10-25T06:33:07.668523199Z","level":"INFO","msg":"booking-api starting","addr":":18080"}
+booking-worker  | {"time":"2026-10-25T06:33:08.361056443Z","level":"INFO","msg":"worker http starting","addr":":8081"}
+-----------------------------
+2026-10-25T06:34:08Z [deploy] rolling back to 1d951b2b25bd74b67c75b97b1dfd904a43065ede
+2026-10-25T06:34:08Z [deploy] IMAGE_TAG=1d951b2b25bd74b67c75b97b1dfd904a43065ede written to /opt/booking-ops-lab/.env
+2026-10-25T06:34:08Z [deploy] $ git_ fetch --quiet origin
+2026-10-25T06:34:09Z [deploy] $ git_ checkout --quiet --detach 1d951b2b25bd74b67c75b97b1dfd904a43065ede
+2026-10-25T06:34:09Z [deploy] $ compose pull --quiet --policy missing
+2026-10-25T06:34:09Z    Image prom/alertmanager:v0.28.1 Skipped Image is already present locally
+2026-10-25T06:34:09Z    Image grafana/grafana:12.2.0 Skipped Image is already present locally
+2026-10-25T06:34:09Z    Image postgres:17-alpine Skipped Image is already present locally
+2026-10-25T06:34:09Z    Image ghcr.io/parkbomjun/booking-ops-lab/booking-api:1d951b2b25bd74b67c75b97b1dfd904a43065ede Skipped Image is already present locally
+2026-10-25T06:34:09Z    Image ghcr.io/parkbomjun/booking-ops-lab/mock-forwarder:1d951b2b25bd74b67c75b97b1dfd904a43065ede Skipped Image is already present locally
+2026-10-25T06:34:09Z    Image ghcr.io/parkbomjun/booking-ops-lab/worker:1d951b2b25bd74b67c75b97b1dfd904a43065ede Skipped Image is already present locally
+2026-10-25T06:34:09Z    Image prom/prometheus:v3.5.0 Skipped Image is already present locally
+2026-10-25T06:34:09Z [deploy] $ compose up -d --remove-orphans --quiet-pull
+2026-10-25T06:34:09Z    Container booking-prometheus Running 
+2026-10-25T06:34:09Z    Container booking-alertmanager Running 
+2026-10-25T06:34:09Z    Container booking-grafana Running 
+2026-10-25T06:34:09Z    Container booking-postgres Running 
+2026-10-25T06:34:09Z    Container mock-forwarder Recreate 
+2026-10-25T06:34:09Z    Container booking-api Recreate 
+2026-10-25T06:34:10Z    Container mock-forwarder Recreated 
+2026-10-25T06:34:10Z    Container booking-api Recreated 
+2026-10-25T06:34:10Z    Container booking-worker Recreate 
+2026-10-25T06:34:11Z    Container booking-worker Recreated 
+2026-10-25T06:34:11Z    Container mock-forwarder Starting 
+2026-10-25T06:34:11Z    Container booking-postgres Waiting 
+2026-10-25T06:34:11Z    Container mock-forwarder Started 
+2026-10-25T06:34:11Z    Container booking-postgres Healthy 
+2026-10-25T06:34:11Z    Container booking-api Starting 
+2026-10-25T06:34:11Z    Container booking-api Started 
+2026-10-25T06:34:11Z    Container booking-postgres Waiting 
+2026-10-25T06:34:12Z    Container booking-postgres Healthy 
+2026-10-25T06:34:12Z    Container booking-worker Starting 
+2026-10-25T06:34:12Z    Container booking-worker Started 
+2026-10-25T06:34:12Z [deploy] health http://127.0.0.1:8081/healthz -> 503
+2026-10-25T06:34:14Z [deploy] health ok (1/3)
+2026-10-25T06:34:16Z [deploy] health ok (2/3)
+2026-10-25T06:34:18Z [deploy] health ok (3/3)
+2026-10-25T06:34:18Z [deploy] rollback complete: running 1d951b2b25bd74b67c75b97b1dfd904a43065ede
+2026-10-25T06:34:18Z [deploy] DEPLOY_RESULT=rolled_back
