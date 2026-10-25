@@ -35,3 +35,14 @@ locals {
     var.tags,
   )
 }
+
+# GitHub OIDC subject 의 저장소 부분.
+# GitHub 는 새 저장소에 "owner@<owner_id>/repo@<repo_id>" 강화 형식을 쓴다(2026-10 실배포에서 AADSTS700213 으로 발견).
+# ID 두 개가 주어지면 강화 형식, 아니면 기존 "owner/repo" 형식으로 subject 를 만든다.
+locals {
+  github_oidc_repo = (
+    var.github_owner_id != null && var.github_repository_id != null
+    ? format("%s@%d/%s@%d", split("/", var.github_repository)[0], var.github_owner_id, split("/", var.github_repository)[1], var.github_repository_id)
+    : var.github_repository
+  )
+}

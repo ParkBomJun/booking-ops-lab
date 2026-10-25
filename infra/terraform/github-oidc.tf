@@ -24,7 +24,7 @@ resource "azuread_application_federated_identity_credential" "main_branch" {
   description    = "Workflows running on refs/heads/main of ${var.github_repository}"
   audiences      = ["api://AzureADTokenExchange"] # Entra 가 요구하는 고정 audience
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_repository}:ref:refs/heads/main"
+  subject        = "repo:${local.github_oidc_repo}:ref:refs/heads/main"
 }
 
 # 페더레이션 자격 증명 2: GitHub Environment "production" 을 쓰는 job.
@@ -36,7 +36,7 @@ resource "azuread_application_federated_identity_credential" "production_environ
   description    = "Jobs using GitHub environment '${var.github_environment}' in ${var.github_repository}"
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_repository}:environment:${var.github_environment}"
+  subject        = "repo:${local.github_oidc_repo}:environment:${var.github_environment}"
 }
 
 # 역할: VM 리소스 하나에만 Virtual Machine Contributor.

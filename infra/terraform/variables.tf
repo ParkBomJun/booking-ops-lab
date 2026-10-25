@@ -201,3 +201,15 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "github_owner_id" {
+  description = "GitHub 소유자(사용자/조직)의 숫자 ID. github_repository_id 와 함께 주면 OIDC subject 에 강화 형식(owner@id/repo@id)을 쓴다. 저장소 이름이 바뀌거나 삭제 후 같은 이름으로 재생성돼도 다른 신원으로 취급돼 안전하다. 값: GET https://api.github.com/users/<owner> 의 id."
+  type        = number
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "GitHub 저장소의 숫자 ID. 값: GET https://api.github.com/repos/<owner>/<repo> 의 id."
+  type        = number
+  default     = null
+}
