@@ -19,3 +19,16 @@ Windows Chrome 헤드리스로 찍는다 (Grafana 는 캡처 동안만 익명 Vi
 chrome.exe --headless=new --window-size=1600,1000 --virtual-time-budget=30000 --screenshot=<out>.png "<url>"
 ```
 주의: 훈련 중 Docker VM 시계가 호스트보다 뒤처져 있어 데이터가 실제보다 이른 시각에 기록됐다. "최근 1시간" 대신 `g0.end_input` / Grafana `from`·`to` 로 구간을 명시해 찍었다.
+
+## 추가 예정 — 2026-10-25 Azure 실배포 (파일은 사람이 넣는다)
+
+Grafana 는 NSG 로 작업자 IP 에만 열려 있어 외부인은 접속할 수 없다. 그래서 운영 화면은 스크린샷으로 대체한다. 캡처 시 구독 ID·개인 IP 가 보이는 부분은 가린다.
+
+| 파일 | 내용 |
+|---|---|
+| `cd-4-first-success.png` | Actions CD #4 (`2b46837`) — 첫 end-to-end 성공. verify · build-push ×3 · deploy 전부 초록, 1m 36s |
+| `cd-5-rolled-back.png` | Actions CD #5 (`6bb00dc`) — deploy job 빨강, 요약에 `DEPLOY_RESULT=rolled_back` 과 `rolling back to 1d951b2…` |
+| `cd-runs-list.png` | CD 실행 목록 — #4 초록 → #5 빨강 → #6 초록 연속. 문서 커밋 `2083a55` 에는 실행이 없다 |
+| `grafana-azure-home.png` | Azure VM 의 Grafana (`http://<fqdn>:3000`) 홈 — 프로비저닝된 데이터 소스·대시보드 |
+| `azure-resource-group.png` | 포털 `rg-bookingops-lab` 리소스 목록 — Terraform 이 만든 것(VM·NIC·공인 IP·NSG·VNet·Storage·Key Vault·자동 종료) |
+| `history-log.png` | VM `/opt/booking-ops-lab/.deploy/history.log` — `rolled_back new=6bb00dc… rollback_to=1d951b2…` 행 |

@@ -155,3 +155,29 @@
 - **설정 자동 보정의 가시성**: 임대 하한 보정이 로그 WARN 한 줄에만 남아 알림으로 이어지지 않았다. `worker_config_adjusted{setting}` Gauge(정상 0 명시)를 추가하고 info 규칙 `ConfigAdjusted` 를 걸었다. 위반 설정(임대 1000ms)으로 기동하면 1, 정상 설정으로 재기동하면 0 으로 돌아오는 것을 확인.
 - **알림 설계 가정 오류(검증으로 발견)**: 포스트모템에 "라이브락은 BookingProcessingStalled 가 잡는다" 고 적었지만, 재현 훈련에서 12분 49초 동안 한 번도 울리지 않았다. 새 프로세스는 전이 카운터 시계열이 아예 없어(absent) `and` 가 빈 결과가 되기 때문. Discord 에 온 것은 부수 증상인 ForwarderLatencyHigh 뿐. 교훈: **알림 규칙은 "울릴 것이다" 가 아니라 실제 장애를 주입해 도착 시간을 재야 한다.** 그리고 Counter 기반 "0 이면 이상" 규칙은 반드시 absent 를 함께 다뤄야 한다(`or vector(0)`, 또는 시작 시 0 으로 선등록). 상세와 후속 제안은 포스트모템 "감지 방법" 절.
 - **빈 벡터 수정과 재검증**: 규칙 `or vector(0)` + 억제 규칙 + worker 전이 지표 0 선등록 적용. 재검증 2회차(지연 1.5s)는 라이브락이 유지되지 않아 무효였다 — 임대 만료 후 "첫 폴링 틱(1s)" 에야 재claim 되므로 호출 1.5s 가 그 전에 끝났다. 복제본 폴링을 250ms 로 줄여 3회차에서 재현. **Stalled pending +46s, firing +2m47s, Discord +3m18s.** 포워더 지연 warning 은 p95 1.95s 로 침묵해 Stalled 단독으로 도착했음을 확인. 새 포스트모템 `docs/postmortems/2026-10-18-alert-empty-vector.md`.
+
+## 2026-10-25 — 3단계: Azure 첫 실배포 (Terraform apply · CD end-to-end · 자동 롤백 실서버 검증)
+
+### 한 일
+- 평가판 구독 신규 가입 → `az`·`terraform` 설치 → 예산 먼저 apply → 전체 apply(26 리소스, koreacentral, VM `Standard_B2ls_v2`) → Key Vault 비밀 4개 → VM `.env` → GitHub secrets/variables → CD #1~#6. 절차별 결과는 `docs/infra.md` 8.2절, CD 실행 기록은 `docs/cd.md` 11.2절.
+- 훈련 4번(자동 롤백)을 실서버에서 수행. 깨진 배포 시작부터 복구까지 73초, 사람 개입 0. 포스트모템 `docs/postmortems/2026-10-25-drill4-auto-rollback.md`.
+- 저장소를 Public 으로 전환(전환 전 `git log -p --all` 에서 비밀값 패턴 검색 — `.env.example` 자리표시자만 발견). Anthropic 키·Discord 웹훅은 Key Vault 등록 전에 새로 발급.
+
+### AI 실수와 수정
+- **WSL 사용자명 `rkrsi` 를 GitHub 아이디로 추측**: AI(Claude Code)가 실제 계정을 확인하지 않고 두 곳에 심었다 — `docker-compose.prod.yml` 의 이미지 경로 `ghcr.io/rkrsi/...`(VM 이 이미지를 못 받음), `variables.tf` 의 `github_repository` 기본값(OIDC subject 불일치). 문서 4곳에도 전파됐다. 발견: 첫 실배포 당일. 수정: 커밋 `1d951b2`. **`go.mod` 의 `module github.com/rkrsi/...` 세 개는 남아 있다** — 빌드엔 영향 없으나 import 경로 일괄 변경이 필요해 별도 과제(README "다음 할 일" 5번).
+- **GitHub OIDC subject 를 옛 형식으로 전제**: 코드가 `repo:owner/repo:environment:production` 만 알았는데, GitHub 는 새 저장소에 강화 형식 `repo:owner@<owner_id>/repo@<repo_id>:…` 을 쓴다. `azure/login` 이 `AADSTS700213` 으로 거부. 에러 메시지의 subject 를 그대로 읽어 변수 `github_owner_id`·`github_repository_id` 와 `local.github_oidc_repo` 를 추가(커밋 `2b46837`). apply 는 페더레이션 자격 증명 2개 `updated in-place`.
+- **설계 전제(공개 저장소·공개 GHCR 패키지)를 문서에 적지 않음**: cloud-init 의 `git clone` 과 `deploy.sh` 의 `git fetch`, VM 의 `compose pull` 이 전부 무인증인데 그 전제가 어디에도 없었다. 저장소가 비공개 상태에서 첫 cloud-init 이 `could not read Username` 으로 실패했고, 패키지도 `unauthorized` 였다. 전제를 `docs/infra.md` 4절 머리와 `docs/cd.md` 7절에 명시하고, 비공개 지원은 과제로만 적었다.
+- **교훈 한 줄**: AI 가 만든 식별자(계정명·경로·형식)는 실환경에 닿기 전까지 "검증되지 않은 추측" 으로 취급한다. 첫 실배포가 그 검증이었다.
+
+### 검증 결과
+| 항목 | 결과 |
+|---|---|
+| Terraform apply | 예산 1 → 20 → (B2s `SkuNotAvailable` → B2ls_v2) 5 = 26 리소스, destroy 0 |
+| cloud-init | 저장소 Public 전환 후 `clean --logs && reboot` → `status: done` 23.7초 |
+| 첫 배포 (VM 수동 `deploy.sh 1d951b2…`) | `deploy ok (previous: none)`, 첫 healthz 503 → 2초 뒤 3/3, 7개 컨테이너 |
+| CD #4 (`2b46837`) | 첫 end-to-end 초록 1m 36s, deploy 49s |
+| CD #5 (`6bb00dc`, 훈련 4번) | deploy 빨강, `DEPLOY_RESULT=rolled_back`, 73초 |
+| CD #6 (`2ec0e49`, revert) | 초록 |
+| 문서만 바꾼 커밋 `2083a55` | CD 실행 안 됨 — `paths-ignore` 동작 확인(Actions 에 CD #1~#6 만 존재) |
+| `scripts/healthcheck.sh` (VM) | `RESULT: OK` — 7/7, healthz 3/3, targets 5/5, alerts 0, disk 19%, chrony 동기화 |
+| 미실행 | `backup.sh` → Blob, `az storage blob list` — `<확인 필요>` |

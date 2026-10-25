@@ -4,7 +4,15 @@
 
 > 인프라를 코드로 만들고, CI/CD로 안전하게 배포하고, 장애를 사람보다 먼저 감지해 원인을 분석하고, 같은 장애가 반복되지 않게 만든다.
 
-지금은 2단계(로컬 서비스 + 모니터링 + 알림 + 장애 훈련 + CI)를 진행 중이다. 훈련 2·3은 마무리 중이고, 3단계(Azure 인프라 · CD · 백업)는 아래 표에 **"3단계 예정"** 으로 표시했으며 그 항목은 아직 저장소에 없다.
+> **2026-10-25 — Azure 실배포 완료 · CD end-to-end 초록 · 자동 롤백 실서버 검증(73초) · 포스트모템 3편**
+>
+> Terraform 으로 Azure 에 26 리소스를 만들고(`koreacentral`, VM 1대), GitHub Actions CD 가 OIDC 로 로그인해 VM 에 배포하는 것까지 실서버에서 확인했다. 의도적으로 깨진 배포는 사람 개입 없이 73초 만에 이전 버전으로 돌아갔다. 남은 것은 백업·복구 훈련(5번)과 훈련 2·3 포스트모템이다. 기록: [docs/infra.md](docs/infra.md) 8.2절 · [docs/cd.md](docs/cd.md) 11.2절.
+
+## 5분 안에 확인하는 법
+
+1. **CD 자동 롤백** — [Actions › CD](https://github.com/ParkBomJun/booking-ops-lab/actions/workflows/cd.yml) 실행 목록의 연속 세 건: **#4 초록**(첫 end-to-end 성공, 1m 36s) → **#5 빨강**(의도적 결함 `6bb00dc`, deploy job 이 `DEPLOY_RESULT=rolled_back` 로 끝남, 롤백 73초) → **#6 초록**(revert).
+2. **무슨 일이 있었나** — [훈련 4번 포스트모템](docs/postmortems/2026-10-25-drill4-auto-rollback.md)과 VM 의 배포 이력 사본 [history.log](docs/postmortems/evidence/drill4/history.log). `rolled_back new=6bb00dc… rollback_to=1d951b2…` 한 줄이 자동 롤백의 증거다.
+3. **화면** — [docs/screenshots/](docs/screenshots/README.md). Grafana 는 NSG 로 작업자 IP 에만 열려 있어 외부에서 접속할 수 없으므로 **스크린샷으로 대체**한다.
 
 ## 이 저장소가 보여주는 것
 
@@ -186,4 +194,14 @@ Claude Code를 페어 프로그래머로 썼고, 설계 결정과 검증은 직�
 - `BacklogAging`은 라이브락 상황에서 pending/해제를 반복한다. 대기 정의 재검토 필요.
 - worker 전용 Grafana 대시보드가 아직 없다. Docker Desktop VM 시계가 호스트와 어긋나 화면이 비었던 적이 있어, 3단계 VM에서는 시간 동기화 점검을 헬스체크에 넣는다.
 
-다음 단계(3단계): Azure 예산 알림 → Terraform(VNet · NSG · VM · Storage · Key Vault) → CD + 자동 롤백(OIDC) → 백업·복구 스크립트 + cron + 복구 훈련 → 훈련 2 · 3 · 4 · 6 포스트모템 → `security.md` → README에 결과 정리.
+다음 할 일 (2026-10-25 실배포 뒤, 상태 전부 **과제**):
+1. `deploy.sh`: 배포 대상이 현재 태그의 조상(`git merge-base --is-ancestor`)이면 `image_tag` 를 명시한 경우가 아닌 한 거부 — Re-run 이 운영을 한 버전 뒤로 보낸 사고([포스트모템 "부수 발견"](docs/postmortems/2026-10-25-drill4-auto-rollback.md)) 방지.
+2. `deploy.sh`: 롤백 완료 시 Discord 에 `rolled_back new=… rollback_to=…` 한 줄 전송.
+3. ~~`cd.yml` 에 `paths-ignore: ['docs/**', '**.md']`~~ — 이미 있다. 문서만 바꾼 커밋 `2083a55` 에 CD 가 돌지 않은 것을 Actions 목록으로 확인했다.
+4. compose 레벨 `healthcheck` + `depends_on: condition: service_healthy`.
+5. `go.mod` 모듈 경로를 `github.com/ParkBomJun/...` 로 변경(import 일괄). 지금은 AI 가 추측한 `rkrsi` 가 남아 있다(빌드엔 영향 없음, [docs/ai-usage.md](docs/ai-usage.md)).
+6. 비공개 저장소·GHCR 패키지 지원(배포 키 또는 읽기 PAT 를 Key Vault 에).
+7. `backup.sh` → Blob 1회 실행 + 훈련 5번(복구) — 미실행.
+8. Dependabot PR #1 (anthropic-sdk-go 1.82→1.84, CI 초록) 머지.
+
+그 뒤 3단계 나머지: 훈련 2 · 3 · 6 포스트모템 → `security.md` → README 에 결과 정리.
