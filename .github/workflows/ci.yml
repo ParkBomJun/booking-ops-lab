@@ -1,0 +1,150 @@
+# CI — PR 과 main push 마다 "이 커밋이 깨지지 않았는가" 를 자동으로 확인한다.
+# 코드를 읽고 검사만 한다. 이미지 푸시·VM 배포·롤백은 3단계 cd.yml 몫.
+# 모든 줄의 이유는 docs/ci.md 에 있다. 로컬에서 같은 검사는 `make check`.
+name: CI
+
+on:
+  pull_request:              # 어느 브랜치로 가는 PR 이든. main 에 들어오기 전 관문.
+  push:
+    branches: [main]         # main 에 반영된 뒤 한 번 더. 병합된 결과물 자체를 검증한다.
+
+# GITHUB_TOKEN 을 "저장소 읽기" 로만 제한한다. 검사만 하는 워크플로에 쓰기 권한은 필요 없다.
+permissions:
+  contents: read
+
+# 같은 브랜치(ref)에 새 커밋이 오면 돌고 있던 이전 실행을 취소한다. 의미 있는 결과는 최신 커밋 것뿐이다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------- 1. Go: 포맷 → 정적 검사 → 테스트(-race) → 빌드 ----------
+  go:
+    name: go (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10          # 평소 2~3분. 멈추면 무한 대기 대신 실패로 끝낸다.
+    strategy:
+      fail-fast: false           # 한 서비스가 실패해도 나머지는 끝까지 돌려 결과를 다 본다.
+      matrix:
+        service: [booking-api, worker, mock-forwarder]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}   # run 스텝의 cwd. uses 스텝에는 적용되지 않는다.
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # go.mod 의 `go 1.27.2` 를 그대로 쓴다. 버전을 두 곳에 적지 않는다.
+      # 경로는 저장소 루트 기준 (working-directory 는 uses 스텝의 with 에 안 먹는다).
+      - name: Go 설치 + 모듈 캐시
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: services/${{ matrix.service }}/go.mod
+          cache-dependency-path: services/${{ matrix.service }}/go.sum
+
+      # gofmt -l 은 "고쳐야 할 파일 목록" 을 출력할 뿐 종료 코드는 항상 0 이다. 그래서 출력이 비었는지로 판정한다.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          test -z "$unformatted" || {
+            echo "::error::gofmt 미준수 파일 — 로컬에서 'make fmt' 후 다시 커밋하세요"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          }
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race: 데이터 경쟁 감지 (worker 는 goroutine 을 여러 개 쓴다). -count=1: 테스트 캐시 무시, 항상 실제 실행.
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      - name: go build
+        run: go build ./...
+
+  # ---------- 2. Docker: Dockerfile 이 실제로 빌드되는가 (푸시는 안 한다) ----------
+  docker:
+    name: docker (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [booking-api, worker, mock-forwarder]
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # BuildKit 빌더. 아래 type=gha 캐시는 기본 docker 드라이버로는 안 되고 buildx(docker-container 드라이버)가 필요하다.
+      - name: Buildx 준비
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # push: false — CI 는 "빌드되는가" 만 본다. 레이어 캐시는 GitHub Actions 캐시(type=gha)에 남겨
+      # 다음 실행과 3단계 CD 가 재사용한다. scope 를 서비스별로 나눠 셋이 서로 덮어쓰지 않게 한다.
+      - name: 이미지 빌드
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/${{ matrix.service }}
+          push: false
+          tags: ${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ---------- 3. 모니터링 설정: 문법이 깨진 규칙·설정 파일이 서버까지 가는 것을 막는다 ----------
+  monitoring-config:
+    name: monitoring-config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # docker-compose.yml 과 같은 태그. 실제로 돌릴 바로 그 버전의 검사기로 검사해야 의미가 있다.
+      PROMETHEUS_IMAGE: prom/prometheus:v3.5.0
+      ALERTMANAGER_IMAGE: prom/alertmanager:v0.28.1
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 위 태그를 compose 와 다르게 올리면 여기서 걸린다. 두 곳의 버전이 조용히 어긋나는 것을 막는다.
+      - name: compose 와 이미지 태그가 같은지 확인
+        run: |
+          grep -q "image: $PROMETHEUS_IMAGE" docker-compose.yml || { echo "::error::PROMETHEUS_IMAGE 가 docker-compose.yml 과 다릅니다"; exit 1; }
+          grep -q "image: $ALERTMANAGER_IMAGE" docker-compose.yml || { echo "::error::ALERTMANAGER_IMAGE 가 docker-compose.yml 과 다릅니다"; exit 1; }
+
+      # compose 와 같은 경로(/etc/prometheus)에 마운트한다. prometheus.yml 이 rule_files 를 절대 경로로 가리키므로
+      # 다른 곳(/cfg 등)에 마운트하면 "rule file 없음" 으로 실패한다. check config 는 rule_files 까지 따라가 검사한다.
+      - name: promtool check config
+        run: >
+          docker run --rm -v "$PWD/infra/monitoring:/etc/prometheus:ro"
+          --entrypoint promtool "$PROMETHEUS_IMAGE"
+          check config /etc/prometheus/prometheus.yml
+
+      - name: promtool check rules
+        run: >
+          docker run --rm -v "$PWD/infra/monitoring:/etc/prometheus:ro"
+          --entrypoint promtool "$PROMETHEUS_IMAGE"
+          check rules /etc/prometheus/alert-rules.yml
+
+      # webhook_url_file 이 가리키는 /run/secrets/discord_webhook 은 여기 없지만 통과한다.
+      # check-config 는 구조만 검사하고 *_file 은 Alertmanager 가 기동할 때 읽기 때문 (docs/ci.md 참고).
+      - name: amtool check-config
+        run: >
+          docker run --rm -v "$PWD/infra/monitoring/alertmanager:/etc/alertmanager:ro"
+          --entrypoint amtool "$ALERTMANAGER_IMAGE"
+          check-config /etc/alertmanager/alertmanager.yml
+
+      # 실패할 수 있는 명령은 반복문 본문의 "마지막 줄" 에 단독으로 둔다.
+      # `jq empty "$f" && echo ok` 꼴은 jq 가 실패해도 셸(-e)이 멈추지 않아 깨진 파일이 통과한다.
+      - name: Grafana 대시보드 JSON 파싱
+        run: |
+          for f in infra/monitoring/grafana/dashboards/*.json; do
+            echo "check $f"
+            jq empty "$f"
+          done
+
+      # yq(mikefarah v4)는 ubuntu-24.04 러너 이미지에 들어 있다. 파싱만 확인하고 출력은 버린다.
+      - name: Grafana 프로비저닝 YAML 파싱
+        run: |
+          for f in infra/monitoring/grafana/provisioning/*/*.yml; do
+            echo "check $f"
+            yq . "$f" > /dev/null
+          done

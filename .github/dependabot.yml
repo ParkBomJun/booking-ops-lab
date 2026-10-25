@@ -1,0 +1,23 @@
+# Dependabot: 의존성에 새 버전이 나오면 PR 을 자동으로 연다. 병합은 사람이 CI 결과를 보고 결정한다.
+# 작업 요일이 금~일이라 금요일(서울 시각)에 모아서 오게 했다.
+version: 2
+updates:
+  # GitHub Actions: ci.yml 의 커밋 SHA 핀을 새 릴리스의 SHA 로 바꾸고, 뒤의 "# vX.Y.Z" 주석도 함께 갱신한다.
+  # SHA 로 고정한 액션은 이 PR 없이는 영원히 그 버전에 머문다 — 고정의 대가(수동 갱신)를 자동화로 메운다.
+  - package-ecosystem: github-actions
+    directory: /                 # .github/workflows/ 를 찾는 기준 경로
+    schedule:
+      interval: weekly
+      day: friday
+      timezone: Asia/Seoul
+
+  # Go 모듈: go.mod 가 서비스마다 따로 있으므로 세 디렉터리를 모두 지정한다.
+  - package-ecosystem: gomod
+    directories:
+      - /services/booking-api
+      - /services/worker
+      - /services/mock-forwarder
+    schedule:
+      interval: weekly
+      day: friday
+      timezone: Asia/Seoul

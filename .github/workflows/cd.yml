@@ -1,0 +1,202 @@
+# CD — main 에 push 되면 이미지를 빌드해 GHCR 에 올리고, Azure VM 에서 scripts/deploy.sh 를 실행해 배포한다.
+# 흐름: verify(vet·test) → build-push(이미지 3개 병렬) → deploy(OIDC 로그인 → az vm run-command → deploy.sh)
+# deploy.sh 가 /healthz 실패를 보면 스스로 이전 태그로 롤백하고 DEPLOY_RESULT=rolled_back 을 찍는다.
+# deploy job 은 그 줄만 읽어 성공/실패를 판정한다. 줄 단위 설명: docs/cd.md
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:        # 문서만 바뀐 커밋은 배포하지 않는다. 이미지에 들어가는 파일이 없다.
+      - "docs/**"
+      - "**.md"
+  workflow_dispatch:     # 수동 실행. image_tag 를 주면 빌드 없이 그 태그를 배포(롤백·재배포), 비우면 현재 커밋을 빌드해 배포.
+    inputs:
+      image_tag:
+        description: "배포할 이미지 태그 = 커밋 SHA (16진수 7~40자). 비우면 현재 커밋을 빌드해서 배포"
+        required: false
+        type: string
+        default: ""
+
+# GITHUB_TOKEN 의 기본 권한은 읽기만. 필요한 job 에서만 더한다 (최소 권한).
+permissions:
+  contents: read
+
+# 같은 그룹은 동시에 하나만 실행. 뒤에 온 run 은 기다린다.
+# cancel-in-progress: false — 배포 도중 취소하면 VM 이 반쯤 바뀐 상태(.env 는 새 태그, 컨테이너는 옛 것)로 남는다.
+# job 이 아니라 워크플로 전체를 묶는 이유 — job 단위면 커밋 A 의 느린 빌드가 커밋 B 의 배포 뒤에 끝나 A(옛 코드)가 마지막에 올라갈 수 있다.
+# 워크플로 단위로 직렬화하면 순서가 보존된다. 대기열에는 가장 최근 run 하나만 남고 그 사이 것은 GitHub 이 취소한다.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}   # ghcr.io/rkrsi/booking-ops-lab (metadata-action 이 소문자로 맞춘다)
+
+jobs:
+  # 1) CI 와 같은 빠른 검사를 한 번 더. workflow_run 으로 CI 에 묶지 않은 이유는 docs/cd.md "CI 게이트" 절.
+  verify:
+    if: ${{ !inputs.image_tag }}   # 태그를 지정한 수동 실행(이미 빌드된 이미지 재배포)은 건너뛴다
+    runs-on: ubuntu-24.04     # ci.yml 과 같은 러너. latest 는 어느 날 바뀐다
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        service: [booking-api, worker, mock-forwarder]
+    steps:
+      # 액션은 태그가 아니라 커밋 SHA 로 고정한다. 태그는 누군가 옮길 수 있고, SHA 는 바뀌지 않는다. 주석의 버전은 사람용.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: services/${{ matrix.service }}/go.mod      # Go 버전은 go.mod 한 곳에서만 관리
+          cache-dependency-path: services/${{ matrix.service }}/go.sum
+      - name: go vet / go test
+        working-directory: services/${{ matrix.service }}
+        run: |
+          go vet ./...
+          go test ./... -count=1
+
+  # 2) 서비스별 이미지를 빌드해 GHCR 에 올린다. 태그: 커밋 SHA(배포용, 불변) + main(최신 포인터, 사람용).
+  build-push:
+    needs: verify
+    if: ${{ !inputs.image_tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write      # GHCR push 에 필요. GITHUB_TOKEN 으로 충분하다 — PAT 를 만들지 않는다.
+    strategy:
+      matrix:
+        service: [booking-api, worker, mock-forwarder]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # BuildKit 빌더. gha 캐시(cache-from/to) 는 buildx 가 있어야 쓸 수 있다.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}          # push 한 사람의 계정명. 권한은 아래 password 가 결정한다
+          password: ${{ secrets.GITHUB_TOKEN }}  # 이 run 에만 유효한 자동 토큰. 장기 비밀키 없음
+
+      # 태그·라벨 계산. 커밋 SHA 전체(40자)를 태그로 쓴다: github.sha 와 글자가 같아 deploy 단계에서 변환이 없고,
+      # 짧은 SHA 는 드물게 충돌할 수 있다. org.opencontainers.image.* 라벨은 자동으로 붙어 패키지가 저장소에 연결된다.
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value=main
+
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/${{ matrix.service }}            # Dockerfile 의 COPY 기준 디렉터리 (서비스 폴더만)
+          file: services/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64                              # VM 이 amd64. 다중 아키텍처는 빌드 시간만 늘린다
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions 캐시에 레이어를 저장. scope 를 서비스별로 나눠 서로 덮어쓰지 않게 한다. mode=max: 중간 레이어까지.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          # provenance 증명서를 끈다. 켜면 이미지가 "인덱스 + 증명서 매니페스트" 가 되어 GHCR 화면에 unknown/unknown 항목이 생긴다.
+          # 단일 아키텍처·개인 프로젝트에서는 단순한 매니페스트가 낫다. 공급망 증명은 개선 과제로 남긴다.
+          provenance: false
+
+      # digest = 이미지 내용의 sha256. 태그는 옮길 수 있지만 digest 는 내용이 같을 때만 같다. run 요약 화면에 남긴다.
+      - name: digest 기록
+        env:
+          SERVICE: ${{ matrix.service }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "${SERVICE}: ${DIGEST}"
+          {
+            echo "### ${SERVICE}"
+            echo "- digest: \`${DIGEST}\`"
+            echo "- tags: ${TAGS//$'\n'/, }"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 3) VM 에 배포. 이 job 만 Azure 에 닿는다.
+  deploy:
+    needs: build-push
+    # build-push 가 성공했거나, 태그 지정 수동 실행이라 build-push 를 건너뛴 경우에만. verify 실패로 건너뛴 경우는 제외.
+    if: ${{ !cancelled() && (needs.build-push.result == 'success' || (needs.build-push.result == 'skipped' && inputs.image_tag != '')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30    # run-command 자체 상한은 90분. 그 전에 끊는다
+    environment: production   # OIDC 토큰의 subject 가 repo:rkrsi/booking-ops-lab:environment:production 이 된다. Azure 쪽 연합 자격증명과 일치해야 한다.
+    permissions:
+      id-token: write      # OIDC 토큰 발급. 이것이 없으면 azure/login 이 실패한다
+      contents: read
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}   # 비밀은 아니므로 variables 에 둔다
+      AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME }}
+    steps:
+      - name: 배포할 태그 결정
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          tag="${INPUT_TAG:-$PUSH_SHA}"
+          # VM 에서 셸 명령에 끼워 넣으므로 16진수만 허용한다. 다른 글자가 섞이면 여기서 끝.
+          if ! [[ "$tag" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::invalid image tag: ${tag}"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      # 비밀키 없는 로그인. GitHub 이 발급한 OIDC 토큰을 Azure 가 연합 자격증명으로 검증하고 짧은 수명의 액세스 토큰을 준다.
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: VM 에서 deploy.sh 실행
+        id: run
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # VM 안에서 실행될 명령. deploy.sh 의 전체 출력은 VM 의 파일에 두고 마지막 3000 바이트만 돌려받는다.
+          # 이유: run-command 는 출력을 마지막 4096 바이트만 돌려주고, stdout 뒤에 stderr 를 붙인다.
+          # stderr 가 길면 stdout(결과 마커) 이 밀려 사라진다. 2>&1 로 한 파일에 모아 끝부분만 보낸다.
+          cat > remote.sh <<EOF
+          /opt/booking-ops-lab/scripts/deploy.sh ${TAG} > /var/log/booking-deploy-last.out 2>&1
+          rc=\$?
+          tail -c 3000 /var/log/booking-deploy-last.out
+          exit \$rc
+          EOF
+          # RunShellScript: VM 에이전트가 root 로 스크립트를 실행한다. SSH 포트를 CI 에 열 필요가 없다.
+          az vm run-command invoke \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_VM_NAME" \
+            --command-id RunShellScript \
+            --scripts @remote.sh \
+            --output json > result.json
+          # 응답은 JSON. 화면 출력은 value[0].message 안에 "[stdout] ... [stderr] ..." 로 들어 있다.
+          jq -r '.value[0].message' result.json | tee run-output.txt
+          # 마지막 DEPLOY_RESULT= 줄만 본다. run-command 는 스크립트의 종료 코드를 전달하지 않기 때문이다.
+          result="$(grep -o 'DEPLOY_RESULT=[a-z_]*' run-output.txt | tail -n 1 | cut -d= -f2 || true)"
+          echo "result=${result:-missing}" >> "$GITHUB_OUTPUT"
+
+      - name: 결과 판정
+        env:
+          RESULT: ${{ steps.run.outputs.result }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            echo "## deploy ${TAG}: ${RESULT}"
+            echo '```'
+            tail -c 1500 run-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$RESULT" in
+            ok)          echo "::notice::deployed ${TAG}" ;;
+            rolled_back) echo "::error::health check failed on ${TAG}; VM rolled back to the previous tag"; exit 1 ;;
+            failed)      echo "::error::deploy failed and no rollback happened; check /var/log/booking-deploy.log on the VM"; exit 1 ;;
+            *)           echo "::error::no DEPLOY_RESULT marker in output (truncated, VM unreachable, or script missing)"; exit 1 ;;
+          esac
