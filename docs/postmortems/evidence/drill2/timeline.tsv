@@ -1,0 +1,24 @@
+1792668704	20:31:44	preflight: 시계 차이 prometheus-host = 0s
+1792668704	20:31:44	preflight: 컨테이너 running 7/7
+1792668705	20:31:45	preflight: compose 병합 CLAUDE_TIMEOUT_MS 주입값=1 기본값=10000
+1792668705	20:31:45	baseline: discord_sent=11 discord_failed=0 needs_review_count=4 NeedsReviewRatioHigh=none
+1792668705	20:31:45	inject: docker compose --env-file .env --env-file .env.drill2 up -d --no-deps booking-api
+1792668718	20:31:58	inject: 컨테이너 CLAUDE_TIMEOUT_MS=1  ← T0
+1792668718	20:31:58	traffic: 20초마다 3건, 최대 720초, Discord 발송 시 중단=1
+1792668718	20:31:58	traffic: 첫 요청 http=201 status=needs_review review_reason=claude_timeout elapsed_ms=28
+1792668759	20:32:39	alert: NeedsReviewRatioHigh pending  (T0+41s)
+1792669064	20:37:44	alert: NeedsReviewRatioHigh firing  (T0+346s)
+1792669188	20:39:48	discord: notifications_total 11 → 12  (T0+470s)
+1792669188	20:39:48	traffic: Discord 발송 확인 → 트래픽 중단
+1792669188	20:39:48	traffic: 종료. 총 72 건, claude_timeout 폴백 72 건 (T0+470s)
+1792669188	20:39:48	restore: docker compose --env-file .env up -d --no-deps booking-api
+1792669192	20:39:52	restore: 컨테이너 CLAUDE_TIMEOUT_MS=10000 (compose 기본값 10000)
+1792669192	20:39:52	recovery: 실제 Claude 호출 10건, 20초 간격 (model=claude-haiku-5-5)
+1792669387	20:43:07	recovery: parsed 10/10
+1792669387	20:43:07	resolve: NeedsReviewRatioHigh 해제 대기 (최대 720초). 5분 윈도우라 마지막 타임아웃 요청 뒤 5분 이상 걸릴 수 있다
+1792669447	20:44:07	resolve: ALERTS 에서 사라짐  (T0+729s, 원복 후 255s)
+1792669447	20:44:07	discord: resolved 발송 대기 (최대 600초, 현재 12)
+1792669793	20:49:53	discord: notifications_total 12 → 13 (resolved, 해제 후 346s)
+1792669793	20:49:53	check: 최근 2분 claude_timeout 증가분 = 없음(재시작 후 시계열 없음 = 0건)
+1792669794	20:49:54	check: CLAUDE_TIMEOUT_MS=10000, 컨테이너 running 7/7
+1792669794	20:49:54	check: discord notifications_total 11 → 13, failed 0 → 0

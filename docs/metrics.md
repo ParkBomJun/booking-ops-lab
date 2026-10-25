@@ -52,12 +52,12 @@
 - 전이 적용 시 `from`, `to`, `version`. version 충돌 시 `expected_version`, `actual_version`, `actual_status`.
 
 ## 장애 훈련 ↔ 지표
-| 훈련 | 1차 감지 | 원인 분석 |
-|---|---|---|
-| 1. 포워더 실패율 50% | `worker_attempts_total{result!="ok"}` 비율, `worker_retries_total` 급증 | `forwarder_requests_total{outcome="injected_fail"}`, `worker_backlog_count`, `booking_status_count{status="failed"}` |
-| 2. Claude 타임아웃 | 3번 needs_review 유입 급증 | 5번 claude_timeout 비율, 6번 p95 |
-| 3. 중복 전송 | 3번 duplicate 증가, 4번 변화 없음 | DB 행 수 불변 |
-| 4. 잘못된 배포 | /healthz 실패 (CD) | 1번 5xx 비율 |
+| 훈련 | 1차 감지 | 원인 분석 | 상태 |
+|---|---|---|---|
+| 1. 포워더 실패율 50% | `worker_attempts_total{result!="ok"}` 비율, `worker_retries_total` 급증 | `forwarder_requests_total{outcome="injected_fail"}`, `worker_backlog_count`, `booking_status_count{status="failed"}` | 2026-10-18 재현(알림 규칙 작업, `ai-usage.md`). 포스트모템은 파생 장애 2건(`postmortems/`) |
+| 2. Claude 타임아웃 | 3번 needs_review 유입 급증 | 5번 claude_timeout 비율, 6번 p95 | **2026-10-22 완료**. `postmortems/2026-10-22-drill2-claude-timeout.md`, 재현 `scripts/drills/drill2-claude-timeout.sh` |
+| 3. 중복 전송 | 3번 duplicate 증가, 4번 변화 없음 | DB 행 수 불변 | 미실시 |
+| 4. 잘못된 배포 | /healthz 실패 (CD) | 1번 5xx 비율 | 미실시 (3단계 CD 이후) |
 
 ## 알림 규칙 ↔ 지표
 규칙 파일 `infra/monitoring/alert-rules.yml`, 대응 절차 `docs/runbook.md`.

@@ -1,5 +1,41 @@
 # 구조 (2단계 시점)
 
+```mermaid
+flowchart LR
+    client[클라이언트]
+    claude[Claude API]
+    discord[Discord]
+    subgraph svc[서비스 - Go]
+        api[booking-api]
+        db[(PostgreSQL)]
+        worker[worker]
+        fwd[mock-forwarder]
+        faults["장애 주입: FAIL_RATE, DELAY_MS, DUP_RATE, OUT_OF_ORDER"]
+    end
+    subgraph ops[운영 스택]
+        prom[Prometheus]
+        am[Alertmanager]
+        graf[Grafana]
+    end
+    client -->|POST /bookings, Idempotency-Key| api
+    api -->|파싱, 10s 타임아웃, SDK 재시도 0| claude
+    claude -.->|실패·타임아웃이면 needs_review 로 저장| api
+    api -->|INSERT, 멱등키 UNIQUE, status=parsed| db
+    db -->|claim: FOR UPDATE SKIP LOCKED, 임대 60s, version+1| worker
+    worker -->|HTTP 3s, 백오프 1·2·4·8·16s, 최대 5회| fwd
+    worker -->|UPDATE WHERE version = 기대값| db
+    faults -.-> fwd
+    prom -.->|/metrics 15s 수집| api
+    prom -.-> worker
+    prom -.-> fwd
+    prom -.-> am
+    prom -->|알림 규칙 11개, 평가 15s| am
+    am -->|critical · warning, 억제 4개| discord
+    graf -->|대시보드 프로비저닝| prom
+```
+
+텍스트 버전:
+
 ```
 클라이언트 ──POST /bookings──▶ booking-api ──Claude API(파싱, 10s 타임아웃, 실패 시 needs_review)
                                    │ INSERT (status=parsed, 멱등)

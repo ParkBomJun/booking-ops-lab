@@ -3,3 +3,17 @@
 services/booking-api/booking-api
 services/worker/worker
 services/mock-forwarder/mock-forwarder
+.env.*
+!.env.example
+# deploy.sh 가 VM 에 남기는 상태(current_tag 등). 코드가 아니다
+.deploy/
+# DB 백업 산출물 (scripts/backup.sh). 덤프는 git 에 올리지 않는다
+backups/
+# Terraform: 상태 파일(리소스 ID·설정 평문)과 플러그인 캐시, 변수 파일은 커밋하지 않는다. .terraform.lock.hcl 은 커밋한다(docs/infra.md).
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.tfplan
+crash.log

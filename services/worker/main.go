@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/signal" // OS 신호(SIGTERM 등)를 받기 위한 표준 패키지
 	"strconv"
-	"sync"      // WaitGroup: 여러 goroutine 이 끝나길 기다리는 도구
+	"sync" // WaitGroup: 여러 goroutine 이 끝나길 기다리는 도구
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -224,7 +224,7 @@ func (w *worker) finish(ctx context.Context, b *Booking, to string, nextAt time.
 // 지터를 두는 이유: 포워더가 잠깐 죽었다 살아날 때 모든 재시도가 같은 순간에 몰리는(thundering herd) 것을 막는다.
 func (w *worker) backoff(attempt int) time.Duration {
 	d := w.cfg.backoffBase << (attempt - 1) // 1s, 2s, 4s, 8s, 16s ...
-	if d > w.cfg.backoffMax || d <= 0 {       // <=0 은 시프트 오버플로 방어
+	if d > w.cfg.backoffMax || d <= 0 {     // <=0 은 시프트 오버플로 방어
 		d = w.cfg.backoffMax
 	}
 	jitter := 0.8 + rand.Float64()*0.4 // 0.8 ~ 1.2
