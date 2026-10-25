@@ -3,7 +3,7 @@ module github.com/rkrsi/booking-ops-lab/services/booking-api
 go 1.27.2
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.82.0
+	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/prometheus/client_golang v1.25.0
 )
