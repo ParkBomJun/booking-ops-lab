@@ -1,0 +1,55 @@
+#cloud-config
+# VM 첫 부팅 때 한 번만 실행되는 초기화 스크립트. vm.tf 의 custom_data 로 전달된다.
+# admin_username, github_repository 두 값은 vm.tf 의 templatefile 이 채운다. 주석에도 달러-중괄호를 쓰면 템플릿 문법으로 해석되니 쓰지 않는다.
+# 실행 로그: /var/log/cloud-init-output.log  /  상태 확인: cloud-init status --long
+
+# 패키지 목록 갱신 + 보안 패치 전부 적용. 첫 부팅이 몇 분 느려지지만 알려진 취약점을 안고 서비스를 올리지 않는다.
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates   # HTTPS 저장소 검증
+  - curl
+  - gnupg             # apt 저장소 서명키 처리
+  - git               # 저장소 clone (compose 파일·모니터링 설정이 저장소에 있다)
+  - chrony            # 시간 동기화. 로컬 훈련에서 시계가 어긋나 그래프가 비는 일이 있었다(docs/ai-usage.md). healthcheck.sh 가 chronyc tracking 을 점검한다.
+  - jq                # 운영 스크립트에서 JSON(/healthz, az cli 출력) 다루기
+
+# 비밀번호 SSH 로그인 금지. VM 설정(disable_password_authentication)과 이중으로 막는다.
+ssh_pwauth: false
+
+write_files:
+  # Docker 로그 회전. 컨테이너 로그가 무한히 쌓여 디스크를 채우는 것(장애 훈련 6번 시나리오)을 기본 설정에서 막는다.
+  # 컨테이너당 10MB x 3 파일 = 최대 30MB.
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" }
+      }
+
+runcmd:
+  # --- Docker Engine + compose 플러그인: Docker 공식 apt 저장소(Ubuntu 기본 저장소의 docker.io 는 버전이 오래됐다) ---
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  # 코드네임 noble 을 고정으로 쓴다. 이미지를 24.04 로 고정했으니 $(lsb_release -cs) 같은 동적 조회가 필요 없다.
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
+  # --- Azure CLI: Microsoft 공식 apt 저장소. VM 의 관리 ID 로 Key Vault 비밀 읽기·Blob 업로드(backup.sh)에 쓴다 ---
+  - curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+  - chmod a+r /etc/apt/keyrings/microsoft.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin azure-cli
+  # 관리자 계정이 sudo 없이 docker 명령을 쓰도록. docker 그룹 = 사실상 root 권한이므로 이 계정 하나에만 준다.
+  - usermod -aG docker ${admin_username}
+  - systemctl enable --now docker
+  - systemctl enable --now chrony
+  # --- 저장소 clone. 공개 저장소라 인증이 필요 없다. 비공개면 이 단계만 실패하고 위 설치는 유지된다(runcmd 는 실패해도 다음 줄을 계속 실행) ---
+  - git clone --depth 1 https://github.com/${github_repository}.git /opt/booking-ops-lab
+  - chown -R ${admin_username}:${admin_username} /opt/booking-ops-lab
+  # .env 는 여기서 만들지 않는다. 비밀값은 Key Vault 에 있고, 배포 스크립트가 관리 ID 로 읽어 /opt/booking-ops-lab/.env 를 만든다(docs/infra.md 적용 절차).
+
+# $UPTIME 은 cloud-init 자체 치환(Terraform 변수 아님). 부팅 진단 콘솔에서 완료 여부를 한 줄로 확인한다.
+final_message: "booking-ops-lab cloud-init finished after $UPTIME seconds"

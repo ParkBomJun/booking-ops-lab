@@ -1,0 +1,27 @@
+# 복사해서 사용: cp terraform.tfvars.example terraform.tfvars
+# terraform.tfvars 는 .gitignore 대상이다. 아래 값은 전부 자리표시자(가짜)다.
+
+# 필수 ----------------------------------------------------------------------
+subscription_id   = "00000000-0000-0000-0000-000000000000" # az account show --query id -o tsv
+unique_suffix     = "a1b2"                                 # Storage·Key Vault 이름 충돌 방지용 난수. 예: openssl rand -hex 2
+ssh_public_key    = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPLACEHOLDERPLACEHOLDERPLACEHOLDERPLACEHOLDE ops@example.com" # cat ~/.ssh/id_ed25519.pub
+my_ip_cidr        = "203.0.113.10/32"                      # curl -4 ifconfig.me 결과 + /32
+budget_amount     = 30000                                  # 청구 통화 단위. KRW 구독이면 30000 = 3만 원, USD 구독이면 30000 달러가 되니 반드시 확인
+budget_start_date = "2026-11-01T00:00:00Z"                 # 이번 달 1일
+alert_emails      = ["ops@example.com"]
+
+# 선택 (기본값이 있다) -------------------------------------------------------
+# location              = "koreacentral"
+# project               = "bookingops"
+# environment           = "lab"
+# admin_username        = "opsadmin"
+# vm_size               = "Standard_B2s"
+# os_disk_size_gb       = 30
+# vnet_cidr             = "10.10.0.0/16"
+# subnet_cidr           = "10.10.1.0/24"
+# github_repository     = "rkrsi/booking-ops-lab"
+# github_environment    = "production"
+# backup_retention_days = 14
+# auto_shutdown_enabled = true
+# auto_shutdown_time    = "0200"
+# tags                  = { owner = "ops" }
