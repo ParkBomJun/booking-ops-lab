@@ -4,7 +4,7 @@ main 에 커밋이 들어오면 이미지 3개를 만들어 GHCR 에 올리고, 
 
 파일: [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) · [`docker-compose.prod.yml`](../docker-compose.prod.yml) · [`scripts/deploy.sh`](../scripts/deploy.sh) · [`scripts/healthcheck.sh`](../scripts/healthcheck.sh)
 
-**상태: 코드만 있다. 아직 한 번도 실제로 돌지 않았다** (VM 이 없다). 실제 실행 뒤 이 문서의 "검증 기록" 을 채운다.
+**상태: 2026-10-25 Azure VM 에 실배포. CD #4 에서 end-to-end 성공, CD #5 에서 자동 롤백 실서버 검증.** 검증 기록은 11절(11.2 가 실서버), 롤백 포스트모템은 [`docs/postmortems/2026-10-25-drill4-auto-rollback.md`](postmortems/2026-10-25-drill4-auto-rollback.md).
 
 ## 1. 한눈에
 
@@ -105,7 +105,7 @@ verify ──▶ build-push ──▶ deploy ──az vm run-command──▶ de
 |---|---|
 | `needs: build-push` + `if: !cancelled() && (성공 ∥ (건너뜀 ∧ image_tag 있음))` | 빌드 성공 뒤, 또는 태그 지정 수동 실행이라 빌드를 건너뛴 경우. **verify 실패로 건너뛴 경우는 제외** (image_tag 가 비어 있으므로) |
 | `timeout-minutes: 30` | run-command 자체 상한은 90분. 그 전에 끊는다 |
-| `environment: production` | OIDC 토큰의 subject 가 `repo:ParkBomJun/booking-ops-lab:environment:production` 이 된다. Terraform 의 `azuread_application_federated_identity_credential.production_environment` 와 글자 그대로 일치해야 한다. 환경 보호 규칙(승인자)을 붙일 자리이기도 하다 |
+| `environment: production` | OIDC 토큰의 subject 가 `repo:ParkBomJun@<owner_id>/booking-ops-lab@<repo_id>:environment:production` 이 된다. **2026-10-25 확인: 새 저장소는 강화 형식(`owner@<owner_id>/repo@<repo_id>`)을 쓴다.** 옛 형식 `repo:ParkBomJun/booking-ops-lab:…` 을 전제한 코드는 `azure/login` 에서 `AADSTS700213` 으로 거부됐고 커밋 `2b46837` 에서 고쳤다(`infra.md` 4.9절). Terraform 의 `azuread_application_federated_identity_credential.production_environment` 와 글자 그대로 일치해야 한다. 환경 보호 규칙(승인자)을 붙일 자리이기도 하다 |
 | `permissions.id-token: write` | OIDC 토큰 발급 권한. 없으면 `azure/login` 이 "Unable to get ACTIONS_ID_TOKEN_REQUEST_URL" 로 실패 |
 | `env.AZURE_RESOURCE_GROUP/VM_NAME: vars.*` | 비밀이 아니므로 variables. Terraform output `resource_group_name`, `vm_name` 값 |
 | 태그 결정 | `inputs.image_tag` 가 있으면 그것, 없으면 `github.sha`. **16진수 7~40자만 허용** — 아래에서 셸 명령에 끼워 넣으므로 |
@@ -179,6 +179,8 @@ JSON 파싱은 `python3 -I -c`(jq 는 Ubuntu 기본 설치가 아니고 python3 
 
 ## 6. 롤백 이야기 — 훈련 4번
 
+**2026-10-25 실서버에서 수행 — [포스트모템](postmortems/2026-10-25-drill4-auto-rollback.md).** 깨진 커밋 `6bb00dc`(booking-api `PORT` 18080, 아래 "설정" 방법) → CD #5 deploy 빨강, `DEPLOY_RESULT=rolled_back`, 깨진 배포 시작부터 복구까지 73초, 사람 개입 0. 실제 타임라인은 아래 예상(+1:05~+1:10)과 거의 같았다(+1:00 롤백 시작, +1:10 복구). 예상 표는 기록으로 그대로 둔다.
+
 ### 무엇이 일어나는가 (예상 타임라인, 60초 상한 기준)
 | T+ | 어디 | 일 |
 |---|---|---|
@@ -190,7 +192,7 @@ JSON 파싱은 `python3 -I -c`(jq 는 Ubuntu 기본 설치가 아니고 python3 
 | +1:10 | GitHub | job 빨강: "health check failed on <bad>; VM rolled back". run 요약에 출력 끝 1500자 |
 | 병행 | Prometheus | 죽은 서비스의 `up==0` 이 1분 이상이면 `TargetDown`(critical, `for: 1m`) → Discord. 롤백이 60초 안이면 pending 에서 끝날 수도 있다. **CD 가 알림보다 먼저 잡는 것이 정상**이고 알림은 뒷단 안전망 |
 
-### 어떻게 재현하나 (VM 이 생긴 뒤)
+### 어떻게 재현하나 (2026-10-25 에 아래 "설정" 방법으로 수행)
 1. 정상 배포를 한 번 끝내 `previous_tag` 가 생기게 한다 (첫 배포는 롤백 대상이 없다).
 2. 깨진 커밋 하나. 두 가지 중 하나:
    - 코드: `services/booking-api/main.go` 의 서버 시작 직전에 `os.Exit(1)` 또는 `/healthz` 가 503 을 돌려주게 → 이미지는 멀쩡히 빌드되지만 뜨자마자 죽는다 (테스트가 못 잡는 결함의 모형).
@@ -204,7 +206,7 @@ JSON 파싱은 `python3 -I -c`(jq 는 Ubuntu 기본 설치가 아니고 python3 
 
 ## 7. 필요한 GitHub 설정과 Azure 권한
 
-Environment `production` 을 만들고 비밀값은 **환경 범위**에 둔다 (`environment: production` 인 job 만 읽을 수 있다). 값은 전부 `terraform output` 에서 나온다.
+Environment `production` 은 **첫 CD 실행 때 워크플로가 자동 생성한다**(2026-10-25 확인 — 수동 생성 불필요, 보호 규칙만 선택). 비밀값은 **환경 범위**에 둔다 (`environment: production` 인 job 만 읽을 수 있다). 값은 전부 `terraform output` 에서 나온다.
 
 | 이름 | 종류 | 값 출처 | 예 |
 |---|---|---|---|
@@ -216,12 +218,21 @@ Environment `production` 을 만들고 비밀값은 **환경 범위**에 둔다 
 
 ID 세 개는 비밀값은 아니지만(공개돼도 OIDC 없이는 쓸 수 없다) 공개 저장소의 로그에 남길 이유도 없어 secret 으로 둔다.
 
+**전제 — 2026-10-25 첫 실배포에서 드러난 것.** 코드가 아래 둘을 가정하는데 문서에 적혀 있지 않아 첫 cloud-init 과 첫 pull 이 실패했다.
+
+| 전제 | 어디서 쓰나 | 안 지키면 |
+|---|---|---|
+| 저장소 **Public** | cloud-init 의 `git clone`, `deploy.sh` 의 `git fetch/checkout` 이 **인증 없이** 돈다 | cloud-init `fatal: could not read Username for 'https://github.com'` → `status: error` (`infra.md` 4.9절) |
+| GHCR 패키지 3개 **Public** | VM 의 `compose pull` 이 `docker login` 없이 받는다. **저장소 공개와 별개 설정**(Package settings → Change visibility) | `docker manifest inspect` → `unauthorized`, pull 실패 → `DEPLOY_RESULT=failed` |
+
+둘 다 비공개로 가려면 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰는 설계가 필요하다 — 개선 과제(10절)로만 둔다.
+
 Azure 쪽(Terraform `infra/terraform/github-oidc.tf` 가 만든다):
 
 | 항목 | 값 |
 |---|---|
 | 연합 자격증명 issuer | `https://token.actions.githubusercontent.com` |
-| subject | `repo:ParkBomJun/booking-ops-lab:environment:production` (배포 job) — `ref:refs/heads/main` 도 등록돼 있어 환경 없는 job 도 로그인 가능 |
+| subject | `repo:ParkBomJun@<owner_id>/booking-ops-lab@<repo_id>:environment:production` (배포 job, 강화 형식 — 2.4절. Terraform 변수 `github_owner_id`·`github_repository_id`) — `ref:refs/heads/main` 도 등록돼 있어 환경 없는 job 도 로그인 가능 |
 | audience | `api://AzureADTokenExchange` |
 | 역할 | **Virtual Machine Contributor, 범위 = VM 리소스 하나.** `az vm run-command invoke` 가 요구하는 `Microsoft.Compute/virtualMachines/runCommand/action` 포함. RG 의 다른 리소스(Storage, Key Vault)는 보이지도 않는다 |
 | 더 좁히려면 | 사용자 지정 역할: `Actions = [Microsoft.Compute/virtualMachines/read, Microsoft.Compute/virtualMachines/runCommand/action]`, 범위 VM. Contributor 가 가진 start/stop/delete 가 빠진다. 단, run-command 는 VM 안에서 **root** 로 돌기 때문에 이 권한 하나가 사실상 VM 전체다 — subject 를 환경 하나로 묶는 것이 진짜 통제다 |
@@ -232,10 +243,10 @@ Azure 쪽(Terraform `infra/terraform/github-oidc.tf` 가 만든다):
 |---|---|---|
 | docker-ce + compose plugin + azure-cli + chrony + git | cloud-init (`infra/terraform/cloud-init.yaml`) | 있음 |
 | `git clone --depth 1 … /opt/booking-ops-lab`, 소유자 opsadmin | cloud-init | 있음. deploy.sh 가 얕은 클론을 필요할 때 `--unshallow` 한다 |
-| `/opt/booking-ops-lab/.env` | 사람(SSH 로 한 번). Key Vault 의 값으로 채운다. `IMAGE_TAG=` 는 첫 배포가 쓴다 | 수동 |
-| GHCR 패키지 3개를 **public** 으로 | 사람(첫 push 뒤 GitHub Packages 설정에서 한 번). 첫 push 는 private 로 생긴다 | 수동 |
-| GitHub Environment `production` + secrets/variables 5개 | 사람 | 수동 |
-| `/etc/cron.d/booking-healthcheck` | 사람 (`scripts/README.md`) | 수동 |
+| `/opt/booking-ops-lab/.env` | 사람(SSH 로 한 번). Key Vault 의 값으로 채운다. `IMAGE_TAG=` 는 첫 배포가 쓴다 | 완료 (2026-10-25, 변수 9개, `-rw-------`, 빈 값 0) |
+| GHCR 패키지 3개를 **public** 으로 | 사람(첫 push 뒤 GitHub Packages 설정에서 한 번). 첫 push 는 private 로 생긴다 | 완료 (2026-10-25 — VM 의 첫 `manifest inspect` 가 `unauthorized` 로 실패한 뒤 전환) |
+| GitHub Environment `production` + secrets/variables 5개 | 환경은 첫 CD 실행이 자동 생성. secrets 3·variables 2 는 사람 | 완료 (2026-10-25) |
+| `/etc/cron.d/booking-healthcheck` | 사람 (`scripts/README.md`) | `<확인 필요>` — 2026-10-25 등록 여부 기록 없음 |
 
 GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **패키지를 public 으로 두고 VM 은 로그인 없이 pull** 한다. private 로 두려면 VM 에 `read:packages` 권한의 PAT 로 `docker login ghcr.io` 가 필요하고, 그 PAT 는 장기 비밀값이라 Key Vault 에 넣고 만료를 관리해야 한다 — 이 프로젝트에서는 얻는 것이 없다.
 
@@ -252,16 +263,28 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 | VM 꺼짐(자동 종료 스케줄) | `az vm run-command` 가 VM 상태 오류 | VM 켜고 재실행 |
 | opsadmin 의 로컬 수정이 있어 checkout 실패 | `repo sync failed — nothing was restarted` | VM 에서 `git status`, 수정은 커밋으로 올린다 |
 | 작업자 IP 가 바뀜 | CD 와 무관(run-command 는 NSG 를 안 거친다). Grafana·SSH 만 막힌다 | `my_ip_cidr` 갱신 후 apply |
+| 실패한 run 을 **Re-run** 했다 | job 은 초록인데 운영이 **한 버전 뒤**로 간다. `history.log` 에 `ok new=<옛 sha> rollback_to=<새 sha>` | **Re-run 은 그 run 의 커밋을 재배포한다.** 재배포·롤백은 Run workflow(`image_tag` 명시, 또는 비워서 최신 커밋)로. 2026-10-25 CD #3 Re-run 이 CD #4 가 올린 `2b46837` 을 `1d951b2` 로 덮어썼다(포스트모템 "부수 발견"). 기계적 방지는 10절 과제 1 |
 
 ## 10. 아직 안 한 것
-- **실제 실행.** VM 이 없다. 처음 돌릴 때 확인할 것: GHCR 패키지 public 전환, run-command 의 `runuser` 경로(root 로 git 실행), `az` 응답 JSON 의 `message` 형식.
+
+~~실제 실행~~ → 2026-10-25 완료(11.2절). 미검증이던 셋이 모두 CD #4 에서 통과했다: GHCR 패키지 public 전환(수동 1회), run-command 의 `runuser` 경로(root 가 opsadmin 으로 git 실행), `az` 응답 `message` 에서 `DEPLOY_RESULT` 마커 추출.
+
+2026-10-25 실배포에서 나온 개선 과제 (상태: 전부 **과제**):
+1. `deploy.sh`: 배포 대상이 현재 태그의 **조상**(`git merge-base --is-ancestor`)이면 `image_tag` 를 명시한 롤백이 아닌 한 거부 — Re-run 재배포 사고(9절) 방지.
+2. `deploy.sh`: 롤백 완료 시 Discord 에 `rolled_back new=… rollback_to=…` 한 줄 전송 — 지금은 GitHub 의 빨간 run 과 Prometheus `TargetDown` 뿐이고, 73초 롤백은 `TargetDown`(`for: 1m`) 을 울리지도 않았다.
+3. ~~`cd.yml` 에 `paths-ignore: ['docs/**', '**.md']`~~ — **이미 있다**(2.1절). 문서만 바꾼 커밋 `2083a55` 에 CD 가 돌지 않은 것을 Actions 실행 목록(CD 는 #1~#6 만 존재)으로 확인했다. 과제 아님.
+4. compose 레벨 `healthcheck` + `depends_on: condition: service_healthy` → `up -d` 단계에서 더 일찍 실패하게.
+5. 비공개 저장소·GHCR 패키지 지원: 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰기(7절 전제).
+
+그 전부터 있던 것:
 - 환경 보호 규칙(승인자 1명)을 `production` 에 붙이기 — 수동 롤백은 빨라야 하므로 보류.
 - 옛 SHA 이미지 정리(개당 ~20MB×3). 월 1회 `docker image prune -a --filter until=720h` 같은 cron.
 - 이미지 서명·증명(provenance/cosign), 베이스 이미지 digest 고정.
 - 배포 지표: `deploy.sh` 가 Prometheus pushgateway 나 textfile collector 로 `deploy_timestamp`, `deploy_result` 를 남기면 Grafana 에 배포 선을 그을 수 있다.
-- 알림: 롤백이 일어나면 Discord 로 — 지금은 GitHub 의 빨간 run 과 Prometheus TargetDown 뿐.
 
-## 11. 검증 기록 (2026-10-22, 로컬)
+## 11. 검증 기록
+
+### 11.1 로컬 (2026-10-22)
 | 항목 | 결과 |
 |---|---|
 | `actionlint`(rhysd/actionlint 이미지, stdin) on `cd.yml` | 지적 0 |
@@ -272,3 +295,35 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 | `sync_repo` 얕은 클론(`--depth 1`) 시험 | HEAD 배포 → 파일 v3. 이력에 없는 옛 커밋 배포 → "fetching full history" → `--unshallow` → 파일 v1 |
 | `healthcheck.sh` 실제 스택 | 7/7 running, healthz 3/3, targets 5/5, 당시 훈련 2번 중이라 `NeedsReviewRatioHigh` warning 1 → RESULT WARN, exit 0. chrony Normal, 컨테이너 시계 오차 −0.0s, 백업 나이 0h. `DOCKER_BIN=docker.exe` 강제 실행도 동일 |
 | 미검증 | root 로 실행되는 `runuser` 경로(로컬에서 root 아님), 실제 `az vm run-command` 응답 |
+
+### 11.2 실서버 (2026-10-25, Azure VM `vm-bookingops-lab`)
+
+시각은 UTC(KST = +9h). 인프라 쪽 기록은 `infra.md` 8.2절.
+
+**첫 배포는 CD 가 아니라 VM 에서 수동**: `sudo scripts/deploy.sh 1d951b2…` (03:32:26Z) → `deploy ok (previous: none)`. 첫 `/healthz` 는 503(API 가 DB 연결 중) → 2초 뒤 3/3. 7개 컨테이너. 이것으로 `previous_tag` 가 생겨 이후 CD 의 롤백 대상이 준비됐다.
+
+| 실행 | 커밋 | 트리거 | 결과 | 비고 |
+|---|---|---|---|---|
+| CD #1 | `17514fb` | push | deploy 실패 | secrets 미등록. verify·build-push 는 통과 → 이미지는 GHCR 에 올라감 |
+| CD #2 | `1d951b2` | push (GHCR 경로 수정) | deploy 실패 | 위와 같음 |
+| CD #3 | `1d951b2` | 수동(12:36 KST) → Re-run | 처음 `AADSTS700213` → OIDC 수정(`2b46837`) 후 Re-run 성공 | **Re-run 은 실행 시점 커밋(`1d951b2`)을 배포** → CD #4 가 올린 `2b46837` 을 덮어씀(03:47:13Z). 9절, 포스트모템 "부수 발견" |
+| CD #4 | `2b46837` | push (OIDC 수정) | **전부 초록**, 1m 36s, deploy 49s | **첫 end-to-end 성공**: OIDC 로그인 → `az vm run-command` → VM `deploy.sh` → 헬스 3/3. 03:45:36Z |
+| CD #5 | `6bb00dc` | push (훈련 4번, `PORT` 18080) | deploy 빨강 — `DEPLOY_RESULT=rolled_back` | 자동 롤백 73초. [포스트모템](postmortems/2026-10-25-drill4-auto-rollback.md) |
+| CD #6 | `2ec0e49` | push (revert) | 초록 | 정상 복귀 |
+| (없음) | `2083a55` | push (문서만) | **CD 실행 안 됨** | `paths-ignore` 가 동작. Actions 목록에 CD 는 #1~#6 만 있음 |
+
+VM 의 `.deploy/history.log` ([증거 사본](postmortems/evidence/drill4/history.log)):
+```
+2026-10-25T03:32:26Z ok          new=1d951b2… rollback_to=none        ← 첫 수동 배포
+2026-10-25T03:45:36Z ok          new=2b46837… rollback_to=1d951b2…    ← CD #4
+2026-10-25T03:47:13Z ok          new=1d951b2… rollback_to=2b46837…    ← CD #3 Re-run (한 버전 뒤로)
+2026-10-25T06:34:18Z rolled_back new=6bb00dc… rollback_to=1d951b2…    ← CD #5 자동 롤백
+2026-10-25T06:40:29Z ok          new=2ec0e49… rollback_to=1d951b2…    ← CD #6 revert
+```
+
+| 항목 | 결과 |
+|---|---|
+| `scripts/healthcheck.sh` (VM, 06:37Z) | containers 7/7, healthz 3/3 200, prometheus targets 5/5, alerts firing 0, disk 19%, chrony 동기화, `RESULT: OK`. `last backup 기록 없음`(INFO) |
+| Grafana (`http://<fqdn>:3000`) | 데이터 소스·대시보드 프로비저닝 정상 — 첫 로그인 화면에서 COMPLETE |
+| 2.4절 "미검증" 셋 | `runuser` 경로, `az` 응답 `message` 형식, GHCR public pull — CD #4 통과로 전부 확인 |
+| 미실행 | `backup.sh` → Blob 업로드, `az storage blob list` 확인 — `<확인 필요>` (아직 안 돌림) |
