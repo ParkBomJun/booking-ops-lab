@@ -31,7 +31,7 @@ services:
     image: booking-api:local
     container_name: booking-api
     environment:
-      PORT: "18080"
+      PORT: "8080"
       # 호스트 이름 "postgres" 는 compose 가 만든 내부 네트워크의 서비스 이름이다.
       # 컨테이너 간 통신이므로 localhost 가 아니다.
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
