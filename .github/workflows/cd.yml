@@ -32,7 +32,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository }}   # ghcr.io/rkrsi/booking-ops-lab (metadata-action 이 소문자로 맞춘다)
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}   # ghcr.io/parkbomjun/booking-ops-lab (metadata-action 이 소문자로 맞춘다)
 
 jobs:
   # 1) CI 와 같은 빠른 검사를 한 번 더. workflow_run 으로 CI 에 묶지 않은 이유는 docs/cd.md "CI 게이트" 절.
@@ -127,7 +127,7 @@ jobs:
     if: ${{ !cancelled() && (needs.build-push.result == 'success' || (needs.build-push.result == 'skipped' && inputs.image_tag != '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30    # run-command 자체 상한은 90분. 그 전에 끊는다
-    environment: production   # OIDC 토큰의 subject 가 repo:rkrsi/booking-ops-lab:environment:production 이 된다. Azure 쪽 연합 자격증명과 일치해야 한다.
+    environment: production   # OIDC 토큰의 subject 가 repo:ParkBomJun/booking-ops-lab:environment:production 이 된다. Azure 쪽 연합 자격증명과 일치해야 한다.
     permissions:
       id-token: write      # OIDC 토큰 발급. 이것이 없으면 azure/login 이 실패한다
       contents: read

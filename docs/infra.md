@@ -146,7 +146,7 @@ VM 삭제 시 OS 디스크도 삭제. 기본값도 true 지만 "디스크만 남
 | `budget_amount` | number | (필수) | > 0 | **단위는 구독의 청구 통화.** 아래 설명 |
 | `budget_start_date` | string | (필수) | `YYYY-MM-01T00:00:00Z` | Azure 규칙: 달의 1일, 이번 달이거나 미래 12개월 이내 |
 | `alert_emails` | list(string) | (필수) | 1개 이상, 이메일 형식 | 예산·자동 종료 알림 수신 |
-| `github_repository` | string | `rkrsi/booking-ops-lab` | `owner/repo` | OIDC subject 에 들어감. 틀리면 GitHub 로그인 거부 |
+| `github_repository` | string | `ParkBomJun/booking-ops-lab` | `owner/repo` | OIDC subject 에 들어감. 틀리면 GitHub 로그인 거부 |
 | `github_environment` | string | `production` | 1~64자 | `cd.yml` 의 `environment: production` 과 같아야 함 |
 | `backup_retention_days` | number | 14 | 1~365 | Blob 수명 주기 |
 | `auto_shutdown_enabled` / `auto_shutdown_time` | bool / string | true / `0200` | HHmm | 자동 종료 |

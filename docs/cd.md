@@ -71,7 +71,7 @@ verify ──▶ build-push ──▶ deploy ──az vm run-command──▶ de
 | `concurrency.group: deploy-production` | 같은 그룹은 동시에 하나만. 뒤에 온 run 은 기다린다. 대기열엔 가장 최근 하나만 남고 그 사이 것은 GitHub 이 취소한다 |
 | `cancel-in-progress: false` | 배포 **도중** 취소하면 VM 이 반쯤 바뀐 상태(.env 는 새 태그, 컨테이너는 옛것)로 남는다. 끝까지 하고 다음 것을 돌린다 |
 | 워크플로 단위 그룹 | job 단위로 묶으면 커밋 A 의 느린 빌드가 커밋 B 배포 뒤에 끝나 **옛 코드 A 가 마지막에 올라갈 수 있다.** 전체를 직렬화하면 순서가 보존된다. 빌드가 겹치지 않는 대가는 수 분 |
-| `env.IMAGE_PREFIX: ghcr.io/${{ github.repository }}` | `ghcr.io/rkrsi/booking-ops-lab`. 세 서비스가 이 아래에 붙는다 |
+| `env.IMAGE_PREFIX: ghcr.io/${{ github.repository }}` | `ghcr.io/parkbomjun/booking-ops-lab`. 세 서비스가 이 아래에 붙는다 |
 
 ### 2.2 `verify`
 | 줄 | 뜻 |
@@ -105,7 +105,7 @@ verify ──▶ build-push ──▶ deploy ──az vm run-command──▶ de
 |---|---|
 | `needs: build-push` + `if: !cancelled() && (성공 ∥ (건너뜀 ∧ image_tag 있음))` | 빌드 성공 뒤, 또는 태그 지정 수동 실행이라 빌드를 건너뛴 경우. **verify 실패로 건너뛴 경우는 제외** (image_tag 가 비어 있으므로) |
 | `timeout-minutes: 30` | run-command 자체 상한은 90분. 그 전에 끊는다 |
-| `environment: production` | OIDC 토큰의 subject 가 `repo:rkrsi/booking-ops-lab:environment:production` 이 된다. Terraform 의 `azuread_application_federated_identity_credential.production_environment` 와 글자 그대로 일치해야 한다. 환경 보호 규칙(승인자)을 붙일 자리이기도 하다 |
+| `environment: production` | OIDC 토큰의 subject 가 `repo:ParkBomJun/booking-ops-lab:environment:production` 이 된다. Terraform 의 `azuread_application_federated_identity_credential.production_environment` 와 글자 그대로 일치해야 한다. 환경 보호 규칙(승인자)을 붙일 자리이기도 하다 |
 | `permissions.id-token: write` | OIDC 토큰 발급 권한. 없으면 `azure/login` 이 "Unable to get ACTIONS_ID_TOKEN_REQUEST_URL" 로 실패 |
 | `env.AZURE_RESOURCE_GROUP/VM_NAME: vars.*` | 비밀이 아니므로 variables. Terraform output `resource_group_name`, `vm_name` 값 |
 | 태그 결정 | `inputs.image_tag` 가 있으면 그것, 없으면 `github.sha`. **16진수 7~40자만 허용** — 아래에서 셸 명령에 끼워 넣으므로 |
@@ -123,7 +123,7 @@ verify ──▶ build-push ──▶ deploy ──az vm run-command──▶ de
 
 | 바꾼 것 | 어떻게 | 왜 |
 |---|---|---|
-| 이미지 출처 | `build: !reset null`, `image: ghcr.io/rkrsi/booking-ops-lab/<svc>:${IMAGE_TAG:?…}` | VM 은 빌드하지 않는다. `:?` 는 IMAGE_TAG 가 비면 즉시 에러 — `booking-api:` 같은 잘못된 이름으로 조용히 실패하지 않게 |
+| 이미지 출처 | `build: !reset null`, `image: ghcr.io/parkbomjun/booking-ops-lab/<svc>:${IMAGE_TAG:?…}` | VM 은 빌드하지 않는다. `:?` 는 IMAGE_TAG 가 비면 즉시 에러 — `booking-api:` 같은 잘못된 이름으로 조용히 실패하지 않게 |
 | `pull_policy: missing` | 로컬에 없을 때만 pull | SHA 태그는 불변. 롤백 때 GHCR 무의존 |
 | 포트 | postgres `ports: !reset []`, 앱 3개·Prometheus·Alertmanager `ports: !override ["127.0.0.1:<p>:<p>"]`, Grafana 는 그대로 `3000:3000` | compose 는 리스트를 **합치므로** 지우려면 `!reset`, 바꾸려면 `!override`. 루프백은 바깥에서 못 닿는다. UI 는 `ssh -L 9090:127.0.0.1:9090 opsadmin@<vm>` |
 | Grafana 공개 | 3000 전체 인터페이스 | 운영 화면이라 브라우저로 봐야 한다. 통제 두 겹: NSG(`my_ip_cidr` 만) + Grafana 로그인(가입 금지). 더 조이려면 `127.0.0.1:3000:3000` + SSH 터널 |
@@ -221,7 +221,7 @@ Azure 쪽(Terraform `infra/terraform/github-oidc.tf` 가 만든다):
 | 항목 | 값 |
 |---|---|
 | 연합 자격증명 issuer | `https://token.actions.githubusercontent.com` |
-| subject | `repo:rkrsi/booking-ops-lab:environment:production` (배포 job) — `ref:refs/heads/main` 도 등록돼 있어 환경 없는 job 도 로그인 가능 |
+| subject | `repo:ParkBomJun/booking-ops-lab:environment:production` (배포 job) — `ref:refs/heads/main` 도 등록돼 있어 환경 없는 job 도 로그인 가능 |
 | audience | `api://AzureADTokenExchange` |
 | 역할 | **Virtual Machine Contributor, 범위 = VM 리소스 하나.** `az vm run-command invoke` 가 요구하는 `Microsoft.Compute/virtualMachines/runCommand/action` 포함. RG 의 다른 리소스(Storage, Key Vault)는 보이지도 않는다 |
 | 더 좁히려면 | 사용자 지정 역할: `Actions = [Microsoft.Compute/virtualMachines/read, Microsoft.Compute/virtualMachines/runCommand/action]`, 범위 VM. Contributor 가 가진 start/stop/delete 가 빠진다. 단, run-command 는 VM 안에서 **root** 로 돌기 때문에 이 권한 하나가 사실상 VM 전체다 — subject 를 환경 하나로 묶는 것이 진짜 통제다 |

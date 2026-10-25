@@ -153,7 +153,7 @@ variable "alert_emails" {
 variable "github_repository" {
   description = "GitHub Actions OIDC 신뢰 대상 저장소(owner/repo). 이 저장소의 main 브랜치와 production 환경에서 온 토큰만 Azure 로그인을 허용한다."
   type        = string
-  default     = "rkrsi/booking-ops-lab"
+  default     = "ParkBomJun/booking-ops-lab"
   validation {
     condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
     error_message = "github_repository 는 'owner/repo' 형식이어야 한다."

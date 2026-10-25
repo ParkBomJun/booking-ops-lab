@@ -25,7 +25,7 @@ services:
     build: !reset null   # VM 은 빌드하지 않는다. 소스가 아니라 CI 가 만든 이미지를 받는다
     # IMAGE_TAG 는 .env 에 있고 deploy.sh 가 바꾼다. 값은 git 커밋 SHA.
     # `:?` 는 "없으면 에러" — 태그가 비면 `booking-api:` 같은 잘못된 이름으로 조용히 실패하는 대신 바로 멈춘다.
-    image: ghcr.io/rkrsi/booking-ops-lab/booking-api:${IMAGE_TAG:?IMAGE_TAG is not set in .env}
+    image: ghcr.io/parkbomjun/booking-ops-lab/booking-api:${IMAGE_TAG:?IMAGE_TAG is not set in .env}
     # missing: 로컬에 없을 때만 pull. SHA 태그는 내용이 바뀌지 않으므로 매번 받을 이유가 없고,
     # 롤백 때 이전 이미지가 이미 디스크에 있으면 GHCR 이 죽어 있어도 롤백이 된다.
     pull_policy: missing
@@ -38,7 +38,7 @@ services:
 
   mock-forwarder:
     build: !reset null
-    image: ghcr.io/rkrsi/booking-ops-lab/mock-forwarder:${IMAGE_TAG:?IMAGE_TAG is not set in .env}
+    image: ghcr.io/parkbomjun/booking-ops-lab/mock-forwarder:${IMAGE_TAG:?IMAGE_TAG is not set in .env}
     pull_policy: missing
     ports: !override
       - "127.0.0.1:8082:8082"
@@ -46,7 +46,7 @@ services:
 
   worker:
     build: !reset null
-    image: ghcr.io/rkrsi/booking-ops-lab/worker:${IMAGE_TAG:?IMAGE_TAG is not set in .env}
+    image: ghcr.io/parkbomjun/booking-ops-lab/worker:${IMAGE_TAG:?IMAGE_TAG is not set in .env}
     pull_policy: missing
     ports: !override
       - "127.0.0.1:8081:8081"
