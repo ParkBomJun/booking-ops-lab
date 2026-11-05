@@ -246,7 +246,7 @@ Azure 쪽(Terraform `infra/terraform/github-oidc.tf` 가 만든다):
 | `/opt/booking-ops-lab/.env` | 사람(SSH 로 한 번). Key Vault 의 값으로 채운다. `IMAGE_TAG=` 는 첫 배포가 쓴다 | 완료 (2026-10-25, 변수 9개, `-rw-------`, 빈 값 0) |
 | GHCR 패키지 3개를 **public** 으로 | 사람(첫 push 뒤 GitHub Packages 설정에서 한 번). 첫 push 는 private 로 생긴다 | 완료 (2026-10-25 — VM 의 첫 `manifest inspect` 가 `unauthorized` 로 실패한 뒤 전환) |
 | GitHub Environment `production` + secrets/variables 5개 | 환경은 첫 CD 실행이 자동 생성. secrets 3·variables 2 는 사람 | 완료 (2026-10-25) |
-| `/etc/cron.d/booking-healthcheck` | 사람 (`scripts/README.md`) | `<확인 필요>` — 2026-10-25 등록 여부 기록 없음 |
+| `/etc/cron.d/booking-healthcheck` | 사람 (`scripts/README.md`). cloud-init 은 등록하지 않는다 | 완료 — 2026-11-05 등록 확인(`5 * * * *`), 자동 실행 확인(04:05 UTC, targets 5/5, alerts 0). 백업 cron(`/etc/cron.d/booking-backup`, `0 18 * * *`)도 등록됨 |
 
 GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **패키지를 public 으로 두고 VM 은 로그인 없이 pull** 한다. private 로 두려면 VM 에 `read:packages` 권한의 PAT 로 `docker login ghcr.io` 가 필요하고, 그 PAT 는 장기 비밀값이라 Key Vault 에 넣고 만료를 관리해야 한다 — 이 프로젝트에서는 얻는 것이 없다.
 
@@ -271,7 +271,7 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 
 2026-10-25 실배포에서 나온 개선 과제 (상태: 전부 **과제**):
 1. `deploy.sh`: 배포 대상이 현재 태그의 **조상**(`git merge-base --is-ancestor`)이면 `image_tag` 를 명시한 롤백이 아닌 한 거부 — Re-run 재배포 사고(9절) 방지.
-2. `deploy.sh`: 롤백 완료 시 Discord 에 `rolled_back new=… rollback_to=…` 한 줄 전송 — 지금은 GitHub 의 빨간 run 과 Prometheus `TargetDown` 뿐이고, 73초 롤백은 `TargetDown`(`for: 1m`) 을 울리지도 않았다.
+2. `deploy.sh`: 롤백 완료 시 Discord 에 `rolled_back new=… rollback_to=…` 한 줄 전송 — 지금은 GitHub 의 빨간 run 과 Prometheus `TargetDown` 뿐이고, 73초 롤백 동안 `TargetDown`(`for: 1m`) 은 pending 4회 뒤 06:34:30 에 firing 에 한 번 닿았다(복구 뒤라 다음 평가에서 해소). Discord 로는 발송되지 않았다 — critical `group_wait` 30s 가 지나기 전에 해소(설계대로, 포스트모템 "감지").
 3. ~~`cd.yml` 에 `paths-ignore: ['docs/**', '**.md']`~~ — **이미 있다**(2.1절). 문서만 바꾼 커밋 `2083a55` 에 CD 가 돌지 않은 것을 Actions 실행 목록(CD 는 #1~#6 만 존재)으로 확인했다. 과제 아님.
 4. compose 레벨 `healthcheck` + `depends_on: condition: service_healthy` → `up -d` 단계에서 더 일찍 실패하게.
 5. 비공개 저장소·GHCR 패키지 지원: 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰기(7절 전제).
@@ -326,4 +326,4 @@ VM 의 `.deploy/history.log` ([증거 사본](postmortems/evidence/drill4/histor
 | `scripts/healthcheck.sh` (VM, 06:37Z) | containers 7/7, healthz 3/3 200, prometheus targets 5/5, alerts firing 0, disk 19%, chrony 동기화, `RESULT: OK`. `last backup 기록 없음`(INFO) |
 | Grafana (`http://<fqdn>:3000`) | 데이터 소스·대시보드 프로비저닝 정상 — 첫 로그인 화면에서 COMPLETE |
 | 2.4절 "미검증" 셋 | `runuser` 경로, `az` 응답 `message` 형식, GHCR public pull — CD #4 통과로 전부 확인 |
-| 미실행 | `backup.sh` → Blob 업로드, `az storage blob list` 확인 — `<확인 필요>` (아직 안 돌림) |
+| `backup.sh` → Blob | cron 자동 실행 2026-10-25T18:00:05Z 성공 — `uploaded 3 blobs to stbookingopslabdc42/backups`, `OK db=booking file=booking-20261025T180002Z.dump size_bytes=6587 duration_ms=204 toc_entries=16 target=azure` (`journalctl -t booking-backup`, `LAST_SUCCESS` 동일). 그 전 2026-10-25T07:14:45Z 수동 실행도 성공 |

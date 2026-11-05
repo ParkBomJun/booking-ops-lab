@@ -19,15 +19,15 @@
 | 공고 항목 | 구현 | 증거 |
 |---|---|---|
 | 모니터링 시스템 구축·운영 | Prometheus가 서비스 3개 + Alertmanager를 15초마다 수집, Grafana 대시보드를 JSON으로 프로비저닝 | [prometheus.yml](infra/monitoring/prometheus.yml) · [대시보드](infra/monitoring/grafana/dashboards/booking-api.json) · [지표 설계](docs/metrics.md) |
-| 장애 원인 분석·대응 프로세스 | 장애 주입 → 알림 도착 시간 측정 → 포스트모템. 알림마다 runbook 항목 연결 | [runbook](docs/runbook.md) · [포스트모템 2건](docs/postmortems/) |
+| 장애 원인 분석·대응 프로세스 | 장애 주입 → 알림 도착 시간 측정 → 포스트모템. 알림마다 runbook 항목 연결 | [runbook](docs/runbook.md) · [포스트모템 3건](docs/postmortems/) |
 | 운영 지표 기반 품질 개선 | 지표 20개의 타입·라벨 선택 근거 문서화. "알림이 평가조차 안 되던" 문제를 지표 선등록으로 개선 | [metrics.md](docs/metrics.md) · [빈 벡터 포스트모템](docs/postmortems/2026-10-18-alert-empty-vector.md) |
-| CI/CD 도입·관리 | CI: 서비스 3개에 gofmt · go vet · go test -race · go build · Dockerfile 빌드, 모니터링 설정은 promtool · amtool · JSON/YAML 파싱 검사. CD + 자동 롤백은 3단계 예정 | [ci.yml](.github/workflows/ci.yml) · [Makefile](Makefile) |
+| CI/CD 도입·관리 | CI: 서비스 3개에 gofmt · go vet · go test -race · go build · Dockerfile 빌드, 모니터링 설정은 promtool · amtool · JSON/YAML 파싱 검사. CD: GHCR → Azure VM 배포 → `/healthz` → 실패 시 자동 롤백(실서버 73초) | [ci.yml](.github/workflows/ci.yml) · [cd.yml](.github/workflows/cd.yml) · [cd.md](docs/cd.md) · [Makefile](Makefile) |
 | 보안 점검·대응 체계 | 비밀값은 `.env`와 compose secrets로만, distroless nonroot 이미지, 설정 읽기 전용 마운트 | [docker-compose.yml](docker-compose.yml) · [Dockerfile](services/booking-api/Dockerfile) |
-| DB 운영 | 바이너리 내장 마이그레이션 + advisory lock, `FOR UPDATE SKIP LOCKED` 큐, 낙관적 잠금. 백업·복구 훈련은 3단계 예정 | [migrations](services/booking-api/migrations/) · [architecture.md](docs/architecture.md) |
+| DB 운영 | 바이너리 내장 마이그레이션 + advisory lock, `FOR UPDATE SKIP LOCKED` 큐, 낙관적 잠금. 백업은 VM cron 으로 매일 Blob 업로드(2026-10-25 자동 실행 확인). 복구 훈련(5번)은 미실행 | [migrations](services/booking-api/migrations/) · [architecture.md](docs/architecture.md) · [backup.md](docs/backup.md) |
 | 해운·물류 이해 | 부킹 텍스트에서 UN/LOCODE · 컨테이너 타입 · ETD 추출, 포워더 전송·확인 상태 기계 | [parser.go](services/booking-api/parser.go) · [상태 기계](docs/architecture.md) |
-| 반복 업무 자동화 스크립트 | 3단계 예정: `backup.sh` · `restore.sh` · `healthcheck.sh` + cron | — |
-| 접근 권한 관리 | 3단계 예정: GitHub Actions OIDC, DB 계정 권한 분리, 접근 통제 문서 | — |
-| 클라우드 인프라 운영 | 3단계 예정: Terraform으로 Azure VNet · NSG · VM · Storage · Key Vault, 예산 알림 먼저 | — |
+| 반복 업무 자동화 스크립트 | `backup.sh`(매일 03:00 KST) · `healthcheck.sh`(매시간) VM cron 실행 중, `deploy.sh`(CD), `restore.sh`(로컬 검증) | [scripts/](scripts/README.md) · [backup.md](docs/backup.md) |
+| 접근 권한 관리 | GitHub Actions → Azure OIDC(장기 비밀키 없음, VM 하나 범위 역할), VM 관리 ID 로 Key Vault 읽기, 역할 할당 최소 권한 표. DB 계정 권한 분리·접근 통제 문서는 미완 | [github-oidc.tf](infra/terraform/github-oidc.tf) · [infra.md 5절](docs/infra.md) |
+| 클라우드 인프라 운영 | Terraform으로 Azure 26 리소스(예산 알림 먼저 → VNet · NSG · VM · Storage · Key Vault · OIDC), 2026-10-25 apply | [infra/terraform/](infra/terraform/) · [infra.md](docs/infra.md) |
 
 ## 구조
 
@@ -140,9 +140,9 @@ curl -s -X POST localhost:8080/bookings \
 | 1 | 포워더 실패율 50% → 재시도 폭증 | 재현 완료 | 주입 174건. 약 7분 뒤 `ForwarderErrorRateHigh` firing(비율 0.30), `FailedBookingsIncreasing`도 firing. Alertmanager의 Discord 발송 5건 · 실패 0(도착 시간은 미측정). 장애 주입은 "주입됐다는 증거 지표"부터 확인한다. [화면](docs/screenshots/README.md) · [기록](docs/ai-usage.md) |
 | 2 | Claude 타임아웃 → 검토 대기함 급증 | 진행 중 | `CLAUDE_TIMEOUT_MS=1`로 폴백(`needs_review`, `claude_timeout`) 동작은 확인. 알림 도착 시간 측정과 포스트모템 예정 |
 | 3 | 같은 부킹 중복 전송 → 멱등성 | 진행 중 | API는 같은 키에 `200` + 기존 행, Claude 미호출 확인. 포워더 `DUP_RATE`(응답 유실) 훈련 예정 |
-| 4 | 잘못된 배포 → 헬스체크 실패 → 자동 롤백 | 3단계(CD) 예정 | `TargetDown` 규칙은 준비됨 |
-| 5 | DB 손상 → 백업에서 복구, 소요시간 측정 | 3단계 예정 | — |
-| 6 | 디스크 급증 → 알림 → 로그 정리 | 3단계 예정 | `DiskUsageHigh` 규칙을 주석으로 준비(node_exporter 필요) |
+| 4 | 잘못된 배포 → 헬스체크 실패 → 자동 롤백 | 완료 (2026-10-25, Azure) | 깨진 설정(`PORT` 18080) 배포 → 73초 만에 이전 태그로 자동 롤백, 사람 개입 0. **Re-run 은 그 run 의 커밋을 재배포한다**는 부수 발견. [포스트모템](docs/postmortems/2026-10-25-drill4-auto-rollback.md) |
+| 5 | DB 손상 → 백업에서 복구, 소요시간 측정 | 예정 | 백업 → Blob 자동화는 동작 중. 복구 절차는 [backup.md](docs/backup.md) 7절 |
+| 6 | 디스크 급증 → 알림 → 로그 정리 | 예정 | `DiskUsageHigh` 규칙을 주석으로 준비(node_exporter 필요) |
 
 계획에 없던 장애 2건은 검증 중에 발견해 포스트모템으로 남겼다.
 
@@ -152,7 +152,7 @@ curl -s -X POST localhost:8080/bookings \
 ## CI/CD
 
 - **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): PR과 main push마다 job 3개가 돈다. ① `go` — 서비스 3개 각각 `gofmt -l` 결과가 비어 있는지 → `go vet` → `go test -race -count=1` → `go build`. ② `docker` — Dockerfile 빌드만 하고 푸시는 안 한다(레이어 캐시는 GitHub Actions 캐시에). ③ `monitoring-config` — compose와 같은 이미지 태그인지 확인한 뒤 `promtool check config` · `promtool check rules` · `amtool check-config`, Grafana 대시보드 JSON·프로비저닝 YAML 파싱. 토큰 권한은 `contents: read`뿐이고 액션은 커밋 SHA로 고정했다. 로컬에서 같은 검사는 `make check`([Makefile](Makefile)). AI가 만든 코드에서 gofmt 미준수가 반복돼(기록된 것만 세 번) gofmt를 CI 관문에 넣었다.
-- **CD** (3단계 예정): main 병합 → 이미지 빌드 → GHCR 푸시(커밋 SHA 태그) → VM 반영 → `/healthz` 확인 → **실패 시 이전 태그로 자동 롤백**. Azure 인증은 OIDC.
+- **CD** ([.github/workflows/cd.yml](.github/workflows/cd.yml) · [docs/cd.md](docs/cd.md)): main 병합 → 이미지 빌드 → GHCR 푸시(커밋 SHA 태그) → `az vm run-command` 로 VM 의 `deploy.sh` → `/healthz` 연속 3회 확인 → **실패 시 이전 태그로 자동 롤백**. Azure 인증은 OIDC. 문서만 바뀐 커밋은 배포하지 않는다.
 
 ## 보안 · 접근 통제 현황
 
@@ -163,7 +163,9 @@ curl -s -X POST localhost:8080/bookings \
 - 입력 상한: 요청 본문 16KB, 포워더 응답 64KB, 스크레이프 `sample_limit` 1000.
 - DB(5432)와 mock-forwarder(8082) 포트는 로컬 디버깅용으로만 열려 있고 compose에 "서버에서는 뺀다"고 적어 두었다.
 
-3단계 예정: GitHub Actions ↔ Azure OIDC(장기 비밀키 없음), Key Vault, NSG(필요한 포트만, SSH는 내 IP만), DB 계정 권한 분리, 보안 점검 체크리스트(`docs/security.md`).
+Azure 에 있는 것(2026-10-25 apply, [infra.md](docs/infra.md) 5절): GitHub Actions ↔ Azure OIDC(장기 비밀키 없음), Key Vault(RBAC, VM 관리 ID 로 읽기), NSG(SSH·Grafana 만 내 IP 에, 나머지 DenyAll), 앱·Prometheus 포트는 127.0.0.1 바인딩.
+
+아직 없는 것: DB 계정 권한 분리, 보안 점검 체크리스트(`docs/security.md`).
 
 ## AI 활용
 
@@ -192,7 +194,8 @@ Claude Code를 페어 프로그래머로 썼고, 설계 결정과 검증은 직�
 - `needs_review` 건을 다시 파싱하는 엔드포인트가 없다(사람 개입 경로 미구현).
 - `OUT_OF_ORDER` 주입은 pull 모델에서 역행 전이를 만들지 못해, 역행 거부는 단위 테스트(`store_test.go`)로만 검증했다.
 - `BacklogAging`은 라이브락 상황에서 pending/해제를 반복한다. 대기 정의 재검토 필요.
-- worker 전용 Grafana 대시보드가 아직 없다. Docker Desktop VM 시계가 호스트와 어긋나 화면이 비었던 적이 있어, 3단계 VM에서는 시간 동기화 점검을 헬스체크에 넣는다.
+- worker 전용 Grafana 대시보드가 아직 없다. Docker Desktop VM 시계가 호스트와 어긋나 화면이 비었던 적이 있어, 헬스체크에 시간 동기화(chrony) 점검을 넣었다.
+- VM 이 꺼져 있으면 백업도 없다. 2026-10-26~11-05 백업 0회를 헬스체크 신선도 경고가 사후에 잡았다([backup.md](docs/backup.md) 2절).
 
 다음 할 일 (2026-10-25 실배포 뒤, 상태 전부 **과제**):
 1. `deploy.sh`: 배포 대상이 현재 태그의 조상(`git merge-base --is-ancestor`)이면 `image_tag` 를 명시한 경우가 아닌 한 거부 — Re-run 이 운영을 한 버전 뒤로 보낸 사고([포스트모템 "부수 발견"](docs/postmortems/2026-10-25-drill4-auto-rollback.md)) 방지.
@@ -201,7 +204,9 @@ Claude Code를 페어 프로그래머로 썼고, 설계 결정과 검증은 직�
 4. compose 레벨 `healthcheck` + `depends_on: condition: service_healthy`.
 5. `go.mod` 모듈 경로를 `github.com/ParkBomJun/...` 로 변경(import 일괄). 지금은 AI 가 추측한 `rkrsi` 가 남아 있다(빌드엔 영향 없음, [docs/ai-usage.md](docs/ai-usage.md)).
 6. 비공개 저장소·GHCR 패키지 지원(배포 키 또는 읽기 PAT 를 Key Vault 에).
-7. `backup.sh` → Blob 1회 실행 + 훈련 5번(복구) — 미실행.
+7. ~~`backup.sh` → Blob 1회 실행~~ — 2026-10-25 수동·cron 모두 성공. 훈련 5번(복구)은 미실행.
+9. cloud-init 에서 cron 자동 등록, 꺼진 VM 의 백업 공백 대책(자동 종료 해제 또는 백업 전 자동 시작).
+10. 로컬 `az` 인증 오류 `AADSTS530035` 원인 조사(지금은 포털로 우회).
 8. Dependabot PR #1 (anthropic-sdk-go 1.82→1.84, CI 초록) 머지.
 
-그 뒤 3단계 나머지: 훈련 2 · 3 · 6 포스트모템 → `security.md` → README 에 결과 정리.
+그 뒤 남은 것: 훈련 2 · 3 · 5 · 6 포스트모템 → `security.md`.

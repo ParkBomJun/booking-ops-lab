@@ -2,7 +2,7 @@
 
 코드: `infra/terraform/` (파일 12개). 이 문서는 그 코드의 **모든 파일·블록·인자**를 순서대로 설명한다. 면접에서 "이 줄은 왜 있나" 에 답하기 위한 문서다.
 
-**현재 상태 (2026-10-25): apply 완료 — 26 리소스(예산 1 + 20 + VM 쪽 5), koreacentral, VM `Standard_B2ls_v2`.** 적용 절차는 4절, 검증 기록은 8절(8.1 정적 검증, 8.2 실제 apply). 아직 안 돌린 것: `backup.sh` → Blob(`<확인 필요>`).
+**현재 상태 (2026-10-25): apply 완료 — 26 리소스(예산 1 + 20 + VM 쪽 5), koreacentral, VM `Standard_B2ls_v2`.** 적용 절차는 4절, 검증 기록은 8절(8.1 정적 검증, 8.2 실제 apply). 백업 → Blob 은 2026-10-25 수동 1회 + cron 자동 1회 성공(8.2절). cron 은 cloud-init 이 아니라 사람이 등록한다(4절 전제).
 
 ## 0. 한눈에
 
@@ -14,7 +14,7 @@
 | NSG (규칙 3개) | `nsg-bookingops-lab-app` | 인바운드는 내 IP → 22, 3000 두 개만 |
 | 고정 공인 IP + NIC | `pip-…-vm` / `nic-…-vm` | SSH·Grafana 접속, 아웃바운드 인터넷 |
 | Linux VM (Ubuntu 24.04, `Standard_B2ls_v2`) | `vm-bookingops-lab` | docker compose 로 스택 7개 실행 (기본값 B2s 는 평가판 구독에서 용량 제한으로 거부됨, 4.9절) |
-| 자동 종료 스케줄 | (VM 에 붙음) | 매일 02:00 KST 할당 해제. 끄는 걸 잊었을 때의 안전망 |
+| 자동 종료 스케줄 | (VM 에 붙음) | 매일 04:00 KST 할당 해제(tfvars `0400`, 코드 기본 `0200`). 끄는 걸 잊었을 때의 안전망 |
 | Storage 계정 + `backups` 컨테이너 + 수명 주기 정책 | `stbookingopslab<접미사>` | DB 백업 보관, N일 뒤 자동 삭제 |
 | Key Vault (RBAC) | `kv-bookingops-lab-<접미사>` | 비밀값 보관. 값은 Terraform 밖에서 넣는다 |
 | Entra 앱 등록 + 서비스 주체 + 페더레이션 자격 증명 2개 | `github-bookingops-lab-cd` | GitHub Actions 가 비밀키 없이(OIDC) Azure 로그인 |
@@ -43,7 +43,7 @@ flowchart TB
             pip["고정 공인 IP<br/>Standard · DNS 라벨"]
             st["Storage stbookingopslab…<br/>backups/ · 수명주기 N일<br/>공유 키 끔 · 방화벽"]
             kv["Key Vault kv-bookingops-lab-…<br/>RBAC · 방화벽"]
-            sched["자동 종료 02:00 KST"]
+            sched["자동 종료 04:00 KST"]
         end
     end
     subgraph entra["Microsoft Entra ID"]
@@ -151,7 +151,7 @@ VM 삭제 시 OS 디스크도 삭제. 기본값도 true 지만 "디스크만 남
 | `github_repository_id` | number | `null` | | GitHub 저장소의 숫자 ID. 값: `GET https://api.github.com/repos/<owner>/<repo>` 의 `id` |
 | `github_environment` | string | `production` | 1~64자 | `cd.yml` 의 `environment: production` 과 같아야 함 |
 | `backup_retention_days` | number | 14 | 1~365 | Blob 수명 주기 |
-| `auto_shutdown_enabled` / `auto_shutdown_time` | bool / string | true / `0200` | HHmm | 자동 종료 |
+| `auto_shutdown_enabled` / `auto_shutdown_time` | bool / string | true / `0200` | HHmm | 자동 종료. **실제 값(tfvars): `0400`** — 03:00 KST 백업 cron 뒤에 꺼지도록 |
 | `tags` | map(string) | {} | | 공통 태그에 merge |
 
 **왜 `vm_size` 기본이 B2s 인가.** 스택이 컨테이너 7개(Postgres, Go 3개, Prometheus, Alertmanager, Grafana)다. 로컬 측정에서 유휴 메모리 합이 1 GiB 를 넘으므로 B1s(1 GiB)는 스왑으로 버티다 OOM 이 난다. B2s 는 2 vCPU · 4 GiB 로 여유가 있고, 버스트형이라 평소 CPU 가 낮은 이 워크로드에 가장 싸다. ARM(B2pts_v2 등)은 더 싸지만 이미지를 multi-arch 로 빌드해야 해서 뺐다.
@@ -341,12 +341,12 @@ VM 의 관리 ID. 이 VM 이 "자기 자신" 으로 Key Vault 를 읽고 Blob �
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "app" {
   virtual_machine_id    = azurerm_linux_virtual_machine.app.id
   enabled               = var.auto_shutdown_enabled
-  daily_recurrence_time = var.auto_shutdown_time      # "0200"
+  daily_recurrence_time = var.auto_shutdown_time      # 기본 "0200", 실제 tfvars "0400"
   timezone              = "Korea Standard Time"       # Windows 시간대 이름 형식
   notification_settings { enabled = true, time_in_minutes = 30, email = var.alert_emails[0] }
 }
 ```
-매일 02:00 KST 할당 해제(deallocate). **컴퓨팅 과금이 멈춘다**(디스크·공인 IP 는 계속, 4.8절). "안 쓸 때 destroy" 를 잊었을 때의 안전망. 30분 전 메일(프로바이더 문서가 주소 하나만 받는다고 해서 목록의 첫 번째). 훈련이 길어지면 메일의 링크로 그날만 미룬다. 다음날은 `az vm start -g rg-bookingops-lab -n vm-bookingops-lab`.
+매일 04:00 KST(tfvars `0400`, 시간대 `Korea Standard Time`) 할당 해제(deallocate). 백업 cron(03:00 KST)보다 뒤여야 한다 — 꺼진 VM 은 백업하지 않는다(`backup.md` 2절). **컴퓨팅 과금이 멈춘다**(디스크·공인 IP 는 계속, 4.8절). "안 쓸 때 destroy" 를 잊었을 때의 안전망. 30분 전 메일(프로바이더 문서가 주소 하나만 받는다고 해서 목록의 첫 번째). 훈련이 길어지면 메일의 링크로 그날만 미룬다. 다음날은 `az vm start -g rg-bookingops-lab -n vm-bookingops-lab`.
 
 ### 2.8 `cloud-init.yaml` — 첫 부팅 초기화
 
@@ -556,7 +556,7 @@ resource "azurerm_role_assignment" "cd_vm_contributor" {
 | 아웃바운드 트래픽 | 월 100GB 무료 | ≈ 0 | GHCR pull 수백 MB 수준 |
 | 예산, NSG, VNet, 서비스 엔드포인트, 자동 종료, 부팅 진단(관리형), Entra 앱, 역할 할당 | 무료 | 0 | |
 | **합계 (24시간)** | | **≈ $36~55 (≈ 5~8만 원)** | |
-| **금·토·일만 켬 (≈ 40%)** | | **≈ $18~25** | 자동 종료 02:00 + 필요할 때 `az vm start` |
+| **금·토·일만 켬 (≈ 40%)** | | **≈ $18~25** | 자동 종료 04:00 + 필요할 때 `az vm start` |
 | **VM 할당 해제만 한 상태** | | ≈ $5~7 | 디스크 + IP. 데이터 유지 |
 | **`terraform destroy` 후** | | **0** | 예산·Entra 앱만 남아도 무료 |
 
@@ -566,7 +566,7 @@ resource "azurerm_role_assignment" "cd_vm_contributor" {
 
 전제: Azure 구독의 **Owner**(역할 할당에 필요), 테넌트에서 앱 등록 생성 가능(개인 테넌트 기본값), 로컬에 `az`·`terraform`(1.9+)·`ssh-keygen`. 모든 명령은 `infra/terraform/` 에서.
 
-**설계가 가정하는 것(2026-10-25 첫 apply 에서 드러남).** ① GitHub 저장소 `ParkBomJun/booking-ops-lab` 이 **Public** — cloud-init 의 `git clone` 과 `deploy.sh` 의 `git fetch/checkout` 이 인증 없이 돈다. ② GHCR 패키지 3개가 **Public** — VM 의 `compose pull` 이 `docker login` 없이 받는다. 저장소 공개와는 **별개 설정**이다. 첫 apply 때 저장소가 비공개여서 cloud-init 이 실패했다(4.9절). 둘 다 비공개로 가려면 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰는 설계가 필요하다 — 개선 과제(7절 12번)로만 둔다.
+**설계가 가정하는 것(2026-10-25 첫 apply 에서 드러남).** ① GitHub 저장소 `ParkBomJun/booking-ops-lab` 이 **Public** — cloud-init 의 `git clone` 과 `deploy.sh` 의 `git fetch/checkout` 이 인증 없이 돈다. ② GHCR 패키지 3개가 **Public** — VM 의 `compose pull` 이 `docker login` 없이 받는다. 저장소 공개와는 **별개 설정**이다. 첫 apply 때 저장소가 비공개여서 cloud-init 이 실패했다(4.9절). 둘 다 비공개로 가려면 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰는 설계가 필요하다 — 개선 과제(7절 12번)로만 둔다. ③ **cron 은 cloud-init 이 등록하지 않는다.** `/etc/cron.d/booking-backup`·`booking-healthcheck` 는 사람이 SSH 로 한 번 설치한다(`docs/backup.md` 6절, `scripts/README.md`). VM 을 다시 만들면 백업도 헬스체크도 돌지 않으므로 재생성 체크리스트에 넣는다. 자동화는 7절 13번.
 
 ### 4.1 준비
 
@@ -680,7 +680,7 @@ BACKUP_TARGET=azure BACKUP_STORAGE_ACCOUNT=<storage> scripts/backup.sh
 
 | 상황 | 명령 | 남는 과금 | 데이터 |
 |---|---|---|---|
-| 오늘 끝, 내일 계속 | `az vm deallocate -g rg-bookingops-lab -n vm-bookingops-lab` (02:00 자동 종료가 같은 일을 한다) | 디스크 + IP ≈ $5~7/월 | 전부 유지 |
+| 오늘 끝, 내일 계속 | `az vm deallocate -g rg-bookingops-lab -n vm-bookingops-lab` (04:00 자동 종료가 같은 일을 한다) | 디스크 + IP ≈ $5~7/월 | 전부 유지 |
 | 이번 주 끝, 다음 주 계속 | `terraform destroy -target=azurerm_linux_virtual_machine.app` | IP ≈ $3/월 + Storage·KV < $1 | **VM·디스크 삭제**(DB 볼륨 소실). 백업(Storage)·비밀(KV)·네트워크·Entra 앱 유지. 재apply 시 VM + cloud-init + 4.5절 `.env` 다시. 복구 훈련(5번)과 묶으면 자연스럽다 |
 | 프로젝트 종료 / 장기 중단 | `terraform destroy` | 0 | **전부 삭제. 백업도 사라진다** — 필요하면 먼저 내려받기. Entra 앱이 재생성되므로 다음 apply 뒤 GitHub secret `AZURE_CLIENT_ID` 갱신 |
 
@@ -703,6 +703,7 @@ destroy 뒤 `az group list -o table` 로 남은 그룹을 확인한다(`NetworkW
 | 재부팅 후 `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` — **2026-10-25 실제** | `cloud-init clean` 이 인스턴스를 새것으로 취급해 SSH 호스트 키를 재생성 | `ssh-keygen -R <fqdn>` 후 재접속. 공격 아님 |
 | VM 에서 `docker manifest inspect ghcr.io/parkbomjun/...` → `unauthorized` — **2026-10-25 실제** | GitHub Actions 가 올린 GHCR 패키지는 기본 **비공개**. `deploy.sh` 는 의도적으로 `docker login` 을 하지 않는다 | 패키지 3개를 각각 Package settings → Change visibility → Public (저장소 공개와 **별개 설정**). 이미지에 비밀값은 없다(런타임 `.env` 에서만) |
 | `azure/login`: `AADSTS700213: No matching federated identity record found for presented assertion subject 'repo:ParkBomJun@139955781/booking-ops-lab@1423225568:environment:production'` — **2026-10-25 실제** | GitHub 가 새 저장소에 **강화 subject 형식**(`owner@<owner_id>/repo@<repo_id>`)을 쓴다. 코드는 옛 형식 `owner/repo` 전제 | 변수 `github_owner_id`, `github_repository_id` 추가 + `local.github_oidc_repo` (커밋 `2b46837`). ID 는 에러 메시지 또는 `GET https://api.github.com/users/<owner>`, `/repos/<owner>/<repo>` 의 `id`. apply 는 페더레이션 자격 증명 2개 `updated in-place` |
+| 로컬 `az vm start` → `AADSTS530035` (보안 기본값이 로그인 차단). `az login --use-device-code` 는 로그인 뒤 "이 리소스에 액세스할 권한이 없음" 으로 거부 — **2026-11-05 실제**(가입 약 11일 후) | `<미해결 — 원인 조사 중>`. 같은 계정의 포털 로그인은 정상 | `<미해결 — 포털로 우회, 원인 조사 중>`. 포털 > VM > 시작 |
 
 ## 5. 보안 검토
 
@@ -780,6 +781,10 @@ terraform {
 10. **azurerm 5.x 업그레이드**: `terraform init -upgrade` 후 변경 안내서 대로 인자 교체. 잠금 파일 diff 리뷰.
 11. 사설 엔드포인트, CMK, GRS — 운영 전환 시.
 12. **비공개 저장소·GHCR 패키지 지원**(2026-10-25 추가): 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·`deploy.sh` 가 관리 ID 로 꺼내 쓰기. 지금은 둘 다 Public 전제(4절 머리).
+13. **cloud-init 에서 cron 자동 등록**(2026-11-05 추가): `write_files` 로 `/etc/cron.d/booking-backup`·`booking-healthcheck` 를 넣는다. 지금은 사람이 등록(4절 전제 ③).
+14. **꺼진 VM 의 백업 공백**(2026-11-05 추가): 자동 종료 후 재시작하지 않으면 백업이 0회다(10/26~11/05). 실운영이면 자동 종료를 끄거나, 백업 시각 전 자동 시작(Automation 런북·Logic App)을 둔다. 상세 `docs/backup.md` 2절.
+15. **앱 기동 시 DB 연결 재시도(백오프)**(2026-11-05 추가): 지금은 DB 가 늦으면 프로세스가 종료되고 재시작 정책에 기댄다(콜드 부팅 때 각 2회). 기동 시 일정 시간 백오프 재시도로 재시작 의존을 없앤다. 코드 변경은 과제로만.
+16. **VM 종료 전 순서 있는 `compose down`**(2026-11-05 추가): 자동 종료 때 postgres 가 앱보다 먼저 내려간다. systemd 유닛(`ExecStop=docker compose down`) 또는 자동 종료 전 스크립트로 앱 → DB 순서로 내린다.
 
 ## 8. 검증 기록
 
@@ -821,5 +826,11 @@ terraform {
 | 4.7 | OIDC (`azure/login`) | 1차 `AADSTS700213`(강화 subject 형식) → `github_owner_id`·`github_repository_id` 추가, 페더레이션 자격 증명 2개 `updated in-place`(커밋 `2b46837`) → CD #4 통과 |
 | 4.7 | Grafana `http://<fqdn>:3000` | 작업자 IP 에서 접속·로그인 OK. 데이터 소스·대시보드 프로비저닝 정상 |
 | 4.7 | `scripts/healthcheck.sh` (VM) | `RESULT: OK` — 7/7, healthz 3/3, targets 5/5, disk 19%, chrony 동기화. 상세 `cd.md` 11.2절 |
-| 4.7 | `az storage blob list`, `BACKUP_TARGET=azure scripts/backup.sh` | **아직 안 돌림** — `<확인 필요>` |
-| 4.7 | 다른 네트워크에서 ssh·:3000 타임아웃 확인 | `<확인 필요>` — 기록 없음 |
+| 4.7 | `BACKUP_TARGET=azure scripts/backup.sh` | cron 자동 실행 2026-10-25T18:00:05Z 성공 — `uploaded 3 blobs to stbookingopslabdc42/backups`, `OK db=booking file=booking-20261025T180002Z.dump size_bytes=6587 duration_ms=204 toc_entries=16 target=azure` (`journalctl -t booking-backup`, `LAST_SUCCESS` 동일). 그 전 2026-10-25T07:14:45Z 수동 실행도 성공 |
+| 4.7 | 다른 네트워크에서 ssh·:3000 타임아웃 확인 | 미수행 — 다음 접속 때 폰 핫스팟으로 확인 |
+| 운영 (2026-11-05 확인) | cron 등록 | `/etc/cron.d/booking-backup`(`0 18 * * *` = 03:00 KST), `/etc/cron.d/booking-healthcheck`(`5 * * * *`) 둘 다 있음. 헬스체크 자동 실행 확인 — 최근 2026-11-05 04:05 UTC, prometheus targets 5/5 up, alerts 0 |
+| 운영 (2026-10-26~11-05) | VM 할당 취소 기간의 백업 | 자동 종료 뒤 재시작하지 않아 **백업 0회**. 11/05 재시작 후 첫 헬스체크가 `WARN last backup 250h ago` 로 감지 — 신선도 검사가 작동한 증거. 과제 7절 14번 |
+| 운영 (2026-11-05) | 할당 취소 → 포털에서 VM 시작 (콜드 부팅) | 컨테이너 7개가 사람 개입 없이 전부 Up, postgres healthy. 배포 태그 `2ec0e49` 유지(`.deploy/current_tag`). **단, 앱 2개가 재시작으로 복구됐다**: postgres 03:59:10Z 기동 → booking-api·booking-worker 03:59:13Z `connection refused`, 03:59:16~17Z `the database system is starting up (57P03)` 로 각 2회 종료 → 재시작 정책으로 03:59:17.8Z 정상화(약 7초). 헬스체크가 `restarts: booking-api(2) booking-worker(2)` WARN 으로 감지. 컨테이너 생성 시각이 2026-10-25T06:40Z(revert 배포)라 훈련 4번과 무관 |
+| 운영 (2026-10-25T19:00:35Z) | 자동 종료(04:00 KST) | worker 로그에 `the database system is shutting down` — 종료 때도 postgres 가 앱보다 먼저 내려갔다. 원인: `depends_on` 은 `compose up` 때만 적용되고, VM 부팅·종료 때는 Docker 데몬이 재시작 정책으로 컨테이너를 동시에 올리고 내려 순서가 보장되지 않는다. 과제 7절 15·16번 |
+| 운영 (2026-11-05) | VM→Discord 전달 확인 | VM 에서 `amtool` 로 수동 알림 `DeliveryTest`(`severity=warning`, 기본 경로 `group_wait: 2m`) 투입 → Discord #ops-alerts 에 `[FIRING:1] DeliveryTest` 13:40 KST(04:40 UTC) 도착(Discord 화면 기준). VM→Alertmanager→Discord 경로 정상. 훈련 4번의 TargetDown 미발송은 경로 문제가 아니라 critical 경로 `group_wait: 30s` 전에 해소된 것(포스트모템 "감지") |
+| 운영 (2026-11-05) | 로컬 `az vm start` | `AADSTS530035` 로 실패, device code 로그인도 권한 거부 → 포털로 우회. 미해결(4.9절) |

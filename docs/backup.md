@@ -16,7 +16,9 @@ PostgreSQL 을 매일 `pg_dump` 로 떠서 보관하고, 덤프 하나로 DB 를
 
 ## 2. RPO / RTO
 
-- **RPO(복구 시점 목표)**: 잃어도 되는 최대 데이터 구간. 매일 18:30 UTC(03:30 KST) 백업이면 최악 **24시간**.
+- **RPO(복구 시점 목표)**: 잃어도 되는 최대 데이터 구간. 매일 18:00 UTC(03:00 KST) 백업이면 최악 **24시간**.
+  - **단, VM 이 켜져 있을 때만.** VM 이 꺼져 있으면 cron 도 돌지 않아 RPO 가 끝없이 늘어난다. 2026-10-26~11-05 VM 이 할당 취소 상태(자동 종료 뒤 재시작 안 함)여서 **백업 0회**였다. 11/05 재시작 후 첫 헬스체크가 `WARN last backup 250h ago` 로 감지했다(신선도 검사 작동). 랩에서는 꺼진 동안 데이터도 안 생기므로 손실은 없지만, 실운영이면 자동 종료를 끄거나 백업 시각 전에 VM 을 자동 시작해야 한다(9절).
+  - 자동 종료(04:00 KST)는 백업(03:00 KST) 뒤에 둔다. 순서가 바뀌면 매일 꺼진 VM 에서 백업이 실패한다.
 - **RTO(복구 시간 목표)**: 손상을 알아챈 뒤 서비스가 정상으로 돌아오기까지. 목표 **5분 이내**(사람 판단 포함).
 
 2026-10-22 로컬 측정(WSL + Docker Desktop, `docker.exe`, DB 437행 · 디스크 7.9MB):
@@ -124,7 +126,7 @@ docker compose exec -T postgres sh -c 'dropdb -U "$POSTGRES_USER" bookings_resto
 | `DOCKER` | 자동 | `docker` 명령 경로. 지정하면 자동 선택을 건너뛴다 |
 
 ### 서버(VM) cron
-VM 은 UTC 다. 03:30 KST = **전날 18:30 UTC**. `/etc/cron.d/booking-backup`:
+VM 은 UTC 다. 03:00 KST = **전날 18:00 UTC**. `/etc/cron.d/booking-backup`:
 
 ```cron
 # cron 은 로그인 셸이 아니다. PATH 가 거의 비어 있고 ~/.bashrc 도 읽지 않는다. 그래서 전부 여기서 정한다.
@@ -134,10 +136,15 @@ MAILTO=""
 # 서버는 compose 파일 두 장을 겹쳐 쓴다(docker-compose.prod.yml). 스크립트가 같은 프로젝트를 보도록 맞춘다.
 COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
 BACKUP_TARGET=azure
-BACKUP_STORAGE_ACCOUNT=stbookingopslab000     # 예시. terraform output storage_account_name 값
-BACKUP_RETENTION_DAYS=2                       # VM 디스크는 작다. 장기 보관은 Blob(14일, Terraform backup_retention_days)
-30 18 * * * opsadmin /opt/booking-ops-lab/scripts/backup.sh 2>&1 | logger -t booking-backup
+# 예시 값. terraform output storage_account_name 값을 넣는다.
+BACKUP_STORAGE_ACCOUNT=stbookingopslab000
+# VM 디스크는 작다. 장기 보관은 Blob(14일, Terraform backup_retention_days).
+BACKUP_RETENTION_DAYS=2
+# 매일 18:00 UTC = 03:00 KST. 자동 종료(04:00 KST)보다 앞이어야 한다.
+0 18 * * * opsadmin /opt/booking-ops-lab/scripts/backup.sh 2>&1 | logger -t booking-backup
 ```
+
+주석은 **반드시 줄 맨 앞 `#`** 로 쓴다. cron 은 줄 끝 주석을 지원하지 않아 `KEY=값  # 설명` 이면 `#` 뒤까지 값이 된다.
 
 cron 환경이 셸과 다른 점:
 
@@ -150,7 +157,9 @@ cron 환경이 셸과 다른 점:
 | `az` 설정 | `~/.azure` | 같은 사용자면 같다 | `az login --identity` 는 매번 해도 된다 |
 | 출력 | 터미널 | 메일(없으면 버려짐) | `logger` 로 journal 에. `journalctl -t booking-backup` |
 
-적용: `sudo install -m 644 <파일> /etc/cron.d/booking-backup` → `sudo systemctl reload cron` → 다음 날 `cat /opt/booking-ops-lab/backups/LAST_SUCCESS`.
+적용: `sudo install -m 644 <파일> /etc/cron.d/booking-backup` → 다음 날 `cat /opt/booking-ops-lab/backups/LAST_SUCCESS`. cron 은 `/etc/cron.d` 변경을 스스로 감지하므로 reload 는 필요 없다(Ubuntu 24.04 에서 `systemctl reload cron` 은 "Job type reload is not applicable" 로 실패한다). 굳이 하려면 `sudo systemctl restart cron`. 이 파일은 cloud-init 이 만들지 않는다 — VM 을 다시 만들면 다시 설치한다.
+
+2026-11-05 확인: VM 에 등록돼 있고 2026-10-25T18:00:05Z 자동 실행 성공(`uploaded 3 blobs to stbookingopslabdc42/backups`, `size_bytes=6587 duration_ms=204 toc_entries=16 target=azure`). 그 전 07:14:45Z 수동 실행도 성공.
 
 ## 7. 복구 훈련 절차 (훈련 5번: 손상 가정 → 복구 → 소요시간 측정)
 
@@ -185,7 +194,9 @@ cron 환경이 셸과 다른 점:
 - **버전.** 덤프는 PG 17.10 에서 떴다. 같은 메이저 또는 더 새 버전으로만 복구한다. 더 오래된 서버로는 안 된다.
 - **복구 중 API.** booking-api 는 세워 두므로 복구 몇 초 동안 요청이 실패할 수 있다. 완전 무중단이 필요하면 다른 이름으로 복구한 뒤 이름을 바꾸는(rename) 방식으로 바꾼다.
 - **행 수 기준값의 시차.** manifest 의 행 수는 덤프와 다른 트랜잭션이다. 쓰기 중이면 수 건 차이가 날 수 있고, 그때는 종료 코드 3 이 "실패" 가 아니라 "확인 필요" 다.
-- **Azure 경로는 아직 실행해 보지 못했다.** 로컬에 az CLI 가 없고, 인프라도 만들기 전이다. 3단계에서 VM 위에서 처음 돌릴 때 `BACKUP_TARGET=azure` 경로와 `--from-azure` 를 실제로 검증하고 이 문서의 측정표를 갱신한다.
+- **Azure 경로: 백업만 검증됐다.** `BACKUP_TARGET=azure` 는 2026-10-25 VM 에서 수동·cron 모두 성공(6절). `--from-azure` 복구는 훈련 5번에서 처음 돌린다.
+- **꺼진 VM 은 백업하지 않는다.** 2026-10-26~11-05 백업 0회(2절). 개선 과제: 실운영이면 자동 종료 해제, 또는 백업 시각 전 자동 시작(Azure Automation 런북·Logic App 으로 `az vm start`). 지금은 헬스체크의 26시간 신선도 경고가 사후 감지만 한다.
+- **cron 은 사람이 등록한다.** cloud-init 이 등록하지 않아 VM 재생성 시 백업이 조용히 멈춘다. 개선 과제: cloud-init `write_files` 로 `/etc/cron.d/booking-backup` 자동 등록(`infra.md` 7절 13번).
 
 ## 10. 2026-10-22 로컬 검증 기록
 

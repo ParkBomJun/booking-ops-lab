@@ -2,7 +2,7 @@
 
 - 날짜: 2026-10-25 (KST 15:31~15:40)
 - 환경: Azure VM `vm-bookingops-lab` (koreacentral, Standard_B2ls_v2) — **첫 실서버 롤백 훈련**
-- 깨진 커밋: `6bb00dc` (CD #5, 빨강) → 복구 커밋: `<revert sha>` (CD #6, 초록)
+- 깨진 커밋: `6bb00dc` (CD #5, 빨강) → 복구 커밋: `2ec0e49` (CD #6, 초록)
 - 증거: `evidence/drill4/` (history.log, deploy 로그 발췌, Prometheus up / ALERTS 구간 JSON)
 
 ## 요약
@@ -36,14 +36,14 @@
 | 06:34:14 | 2:28 | VM | `health ok (1/3)` — 첫 200 |
 | 06:34:18 | 2:32 | VM | `health ok (3/3)` → `rollback complete: running 1d951b2…` → `DEPLOY_RESULT=rolled_back`, history.log 기록 |
 | ~06:34:40 | | Actions | deploy job 실패(exit 1) — CD #5 빨강, 요약에 출력 끝부분 |
-| 06:3x | | GitHub | `git revert` push → CD #6 초록, 정상 배포 (`<revert sha>`) |
+| 06:3x | | GitHub | `git revert` push → CD #6 초록, 정상 배포 (`2ec0e49`) |
 
 ## 감지
 
 | 층 | 결과 |
 |---|---|
 | 1차 — `deploy.sh` 헬스체크 (60초 상한, 연속 3회 200) | **감지 + 복구를 같은 프로세스가 수행.** 사람이 알기 전에 끝났다 |
-| 2차 — Prometheus `TargetDown` (`for: 1m`) → Discord | **알림 없음.** 장애 67초. `ALERTS{alertname="TargetDown"}` 구간 샘플 수: `<N>` (0 이면 pending 조차 안 됨, >0 이면 pending 에서 해소). `cd.md` 6절 예상("롤백이 60초 안이면 pending 에서 끝날 수도 있다")과 일치 — **CD 가 알림보다 먼저 잡는 것이 정상, 알림은 뒷단 안전망** |
+| 2차 — Prometheus `TargetDown` (`for: 1m`) → Discord | 장애 67초. `ALERTS{alertname="TargetDown"}` 구간 샘플 수: **5** (pending 4: 06:33:30~06:34:15, firing 1: 06:34:30). `up` 은 06:33:15~06:34:15 동안 0, 06:34:30 에 1 로 복귀. **pending 에서 끝나지 않고 firing 에 한 번 닿았다** — 롤백이 복구를 마친(06:34:14) 뒤의 평가였고, 약 15초 뒤 다음 평가에서 해소됐다. **Discord 미수신 확인**: 2026-10-25 15:34 KST 전후 #ops-alerts 에 메시지 없음, VM Alertmanager 로그에 notify 실패 없음. 이유: TargetDown 은 `severity: critical`(`alert-rules.yml`) 이라 `alertmanager.yml` 의 critical 경로(`group_wait: 30s`, 19행. 기본 경로는 2m)를 탄다. firing 후 약 15초 만에 해소돼 **첫 발송(30초) 전에 그룹이 끝났고**, 한 번도 발송하지 않은 그룹은 resolved 도 보내지 않는다 — **미발송은 설계대로**. 경로 자체는 정상: 2026-11-05 VM 에서 `amtool` 로 넣은 수동 알림 `DeliveryTest`(`severity=warning`)가 Discord 에 `[FIRING:1] DeliveryTest` 로 13:40 KST(04:40 UTC) 도착했다(Discord 화면 기준)(VM→Alertmanager→Discord). 결론은 기존과 같다: **짧은 장애는 CD 롤백이 먼저 처리하고, 알림은 지속되는 장애용 안전망** |
 | 사람 | 개입 없음. GitHub deploy job 빨강으로 사후 인지 |
 
 ## 근본 원인
@@ -89,4 +89,4 @@ CD #3 은 12:36(KST) 수동 실행 → OIDC subject 불일치로 실패 → Terr
 - 60초 상한은 이 서비스에 적절하다 — 정상 기동이 약 7초(up → 3회 200)라 여유가 크다. 기동이 느린 서비스(마이그레이션·캐시 워밍)라면 늘려야 한다.
 - 첫 실서버 롤백이 `cd.md` 6절의 예상 타임라인(+1:05 ~ +1:10)과 거의 같았다. 로컬에서 세운 모형이 실서버에 통했다.
 - `dump_state` 덕에 원인이 로그 한 줄(`"addr":":18080"`)로 보였다. 롤백은 자동이어도 **왜 실패했는지는 사람이 봐야** 하고, 그 자료를 롤백 전에 남겨두는 것이 맞다.
-- 알림이 안 울린 것은 실패가 아니라 설계대로다. 다만 "조용히 롤백됐다" 를 사람이 알 통로가 GitHub 빨강뿐인 것은 아쉽다 → 과제 4.
+- TargetDown은 `for: 1m` 때문에 이미 복구된 뒤에야 firing에 닿았고, `group_wait` 안에 해소돼 Discord로는 발송되지 않았다. 둘 다 설계대로다. 다만 '조용히 롤백됐다'를 사람이 알 통로가 GitHub 빨강뿐인 것은 아쉽다 → 과제 4.

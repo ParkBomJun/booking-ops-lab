@@ -34,7 +34,7 @@ sudo /opt/booking-ops-lab/scripts/deploy.sh <커밋 sha>   # VM 에서 수동 �
 
 | 스크립트 | 언제 | 누가 부르나 | 남기는 것 |
 |---|---|---|---|
-| `backup.sh` | 매일 18:30 UTC (03:30 KST) | VM cron (`/etc/cron.d/booking-backup`, [`docs/backup.md`](../docs/backup.md)) | `backups/*.dump`, Blob, `backups/LAST_SUCCESS` |
+| `backup.sh` | 매일 18:00 UTC (03:00 KST) | VM cron (`/etc/cron.d/booking-backup`, [`docs/backup.md`](../docs/backup.md)) | `backups/*.dump`, Blob, `backups/LAST_SUCCESS` |
 | `healthcheck.sh` | 매시간 5분 | VM cron (`/etc/cron.d/booking-healthcheck`, 아래) | journal: `journalctl -t booking-healthcheck` |
 | `deploy.sh` | main push, 수동 실행 | CD → `az vm run-command` (root) | `/var/log/booking-deploy.log`, `.deploy/history.log` |
 | `restore.sh` | 훈련 5번, 실제 복구 | 사람 | 복구 전 안전 덤프, `restore_ms` |
@@ -44,11 +44,11 @@ sudo /opt/booking-ops-lab/scripts/deploy.sh <커밋 sha>   # VM 에서 수동 �
 
 ```cron
 # ┌ 분(0-59) ┌ 시(0-23) ┌ 일(1-31) ┌ 월(1-12) ┌ 요일(0-6, 0=일) ┌ 사용자 ┌ 명령
-# * 는 "매번". `5 * * * *` = 매시간 5분. `30 18 * * *` = 매일 18:30. VM 시계는 UTC.
+# * 는 "매번". `5 * * * *` = 매시간 5분. `0 18 * * *` = 매일 18:00. VM 시계는 UTC.
 # cron 은 로그인 셸이 아니라 PATH 가 거의 비어 있다. 그래서 여기서 정한다. opsadmin 은 docker 그룹이라 docker 명령이 된다.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 5 * * * * opsadmin /opt/booking-ops-lab/scripts/healthcheck.sh 2>&1 | logger -t booking-healthcheck
 ```
 
-적용: `sudo install -m 644 <파일> /etc/cron.d/booking-healthcheck` → `sudo systemctl reload cron` → 한 시간 뒤 `journalctl -t booking-healthcheck -n 20`. 백업 cron 줄(`30 18 * * * opsadmin … backup.sh`)은 `docs/backup.md` 의 것을 그대로 쓴다.
+적용: `sudo install -m 644 <파일> /etc/cron.d/booking-healthcheck` → 한 시간 뒤 `journalctl -t booking-healthcheck -n 20`. cron 은 `/etc/cron.d` 변경을 스스로 감지하므로 reload 는 필요 없다(Ubuntu 24.04 에서 `systemctl reload cron` 은 "Job type reload is not applicable"). 굳이 하려면 `sudo systemctl restart cron`. 주석은 줄 맨 앞 `#` 로만 쓴다(cron 은 줄 끝 주석을 값에 포함한다). 백업 cron 줄(`0 18 * * * opsadmin … backup.sh`)은 `docs/backup.md` 의 것을 그대로 쓴다. 두 파일 모두 cloud-init 이 만들지 않는다 — VM 재생성 뒤 다시 설치한다. 2026-11-05 VM 에 둘 다 등록·자동 실행 확인.

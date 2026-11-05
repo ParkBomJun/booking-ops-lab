@@ -180,4 +180,24 @@
 | CD #6 (`2ec0e49`, revert) | 초록 |
 | 문서만 바꾼 커밋 `2083a55` | CD 실행 안 됨 — `paths-ignore` 동작 확인(Actions 에 CD #1~#6 만 존재) |
 | `scripts/healthcheck.sh` (VM) | `RESULT: OK` — 7/7, healthz 3/3, targets 5/5, alerts 0, disk 19%, chrony 동기화 |
-| 미실행 | `backup.sh` → Blob, `az storage blob list` — `<확인 필요>` |
+| `backup.sh` → Blob | 2026-10-25T07:14:45Z 수동 성공, 18:00:05Z cron 자동 성공(`uploaded 3 blobs`, 6,587 B, 204 ms) |
+
+## 2026-11-05 — 3단계: 운영 확인 (cron · 백업 · 재시작 복구) 과 문서 정정
+
+### 한 일
+- VM 재시작 후 cron 2개·백업 → Blob·재시작 복구를 확인하고 `docs/infra.md` 8.2절, `docs/cd.md`, `docs/backup.md` 에 반영.
+- 훈련 4번 포스트모템의 자리표시자(revert 커밋 SHA, TargetDown 샘플 수)를 증거 파일 값으로 채움.
+
+### AI 실수와 수정
+- **cron 줄 끝 주석**: AI 가 쓴 `docs/backup.md` 의 cron 예시는 `BACKUP_STORAGE_ACCOUNT=… # 예시` 처럼 값 뒤에 주석을 달았다. cron 은 줄 끝 주석을 지원하지 않아 `#` 뒤까지 값이 된다. 주석을 윗줄로 옮겼다(실제 VM 파일은 이미 윗줄 형식이었다).
+- **`systemctl reload cron`**: Ubuntu 24.04 의 cron 서비스는 reload 를 지원하지 않아 "Job type reload is not applicable" 로 실패한다. cron 은 `/etc/cron.d` 변경을 스스로 감지하므로 불필요하다고 고쳤다.
+- **백업 시각 불일치**: 문서는 18:30 UTC(03:30 KST)였지만 실제 cron 은 `0 18 * * *`(03:00 KST), 자동 종료는 문서 02:00 KST 와 달리 tfvars `0400`(04:00 KST)이었다. 문서를 실제 값에 맞췄다. 02:00 종료였다면 03:00 백업은 매일 꺼진 VM 에서 실패했을 것이다.
+- **증거 없이 쓴 문장**: 포스트모템이 TargetDown 을 "알림 없음" 으로 적었으나, 증거 JSON 을 세어 보니 pending 4 샘플 뒤 06:34:30 에 firing 1 샘플이 있었다. 문장을 증거대로 고치고 Discord 는 #ops-alerts 미수신·Alertmanager notify 실패 없음을 확인했다(`group_wait` 30s 전에 해소, 설계대로). 교훈: 자리표시자를 채울 때 숫자만 넣지 말고 그 숫자가 주변 문장과 맞는지 본다.
+
+### 검증 결과
+| 항목 | 결과 |
+|---|---|
+| cron | `booking-backup`(`0 18 * * *`), `booking-healthcheck`(`5 * * * *`) 등록·자동 실행 확인 |
+| 백업 신선도 검사 | VM 이 10/26~11/05 꺼져 백업 0회 → 재시작 후 `WARN last backup 250h ago` |
+| 재시작 복구 | 컨테이너 7개 자동 Up, postgres healthy, 태그 `2ec0e49` 유지. 앱 2개는 DB 기동 전 연결 실패로 각 2회 재시작 후 약 7초에 정상화(`depends_on` 은 부팅 때 적용 안 됨) |
+| 미해결 | 로컬 `az` 인증 `AADSTS530035` — 포털로 우회 |
