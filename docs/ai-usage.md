@@ -201,3 +201,22 @@
 | 백업 신선도 검사 | VM 이 10/26~11/05 꺼져 백업 0회 → 재시작 후 `WARN last backup 250h ago` |
 | 재시작 복구 | 컨테이너 7개 자동 Up, postgres healthy, 태그 `2ec0e49` 유지. 앱 2개는 DB 기동 전 연결 실패로 각 2회 재시작 후 약 7초에 정상화(`depends_on` 은 부팅 때 적용 안 됨) |
 | 미해결 | 로컬 `az` 인증 `AADSTS530035` — 포털로 우회 |
+
+## 2026-11-05 (오후) — 3단계: Dependabot 머지(CD #7·#8), 배포 후 스모크 테스트
+
+### 한 일
+- Dependabot PR #2(`docker/login-action`)·PR #1(`anthropic-sdk-go` 1.82.0 → 1.84.0)을 squash 머지. CD #7 `448089a`, CD #8 `9d33c91` 배포.
+- CD #8 첫 실행이 꺼진 VM 때문에 deploy 단계에서 14초 만에 실패 → VM 시작 후 `gh run rerun <id> --failed` 로 deploy 만 재실행해 성공.
+- 배포 직후 VM 안에서 스모크 테스트. `docs/cd.md` 7·9·10·11.2절, `docs/infra.md` 4.9·8.2절, README 에 반영.
+
+### AI 실수와 수정
+- **WSL 사용자명을 GitHub ID 로 추측 — 세 번째 사례**: `go.mod` 3개의 `module github.com/rkrsi/...`. 실제 GitHub 계정은 `ParkBomJun` 이다. 앞의 두 사례(`docker-compose.prod.yml` 이미지 경로, `variables.tf` 의 `github_repository` 기본값)는 2026-10-25 커밋 `1d951b2` 에서 고쳤고, 이것만 빌드에 영향이 없어 남아 있다. 수정은 과제(README "다음 할 일" 5번). 교훈: 계정·조직 이름은 추측하지 말고 `gh api user` 같은 실제 값에서 가져온다.
+
+### 검증 결과
+| 항목 | 결과 |
+|---|---|
+| CD #7 (`448089a`) | 초록. 새 `login-action` 으로 GHCR 로그인·푸시 정상 |
+| CD #8 (`9d33c91`) | 첫 실행 deploy 실패(VM 할당 취소) → `--failed` 재실행 초록 |
+| 스모크 테스트 | `POST` 201 → 같은 키 재전송 200 + 같은 id. `parsed` 8필드 정확, `parsed → sent → confirmed`. Claude 호출 1번(요청 2번), 지연 2.04s, 토큰 입력 349·출력 102 |
+| 헬스체크 | `RESULT: OK`, warn 0 |
+| OIDC 와 사람 MFA | 같은 날 사람의 `az` 는 `AADSTS530035` 로 막혔지만 CD 의 `azure/login` 은 통과 |

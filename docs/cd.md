@@ -4,7 +4,7 @@ main 에 커밋이 들어오면 이미지 3개를 만들어 GHCR 에 올리고, 
 
 파일: [`.github/workflows/cd.yml`](../.github/workflows/cd.yml) · [`docker-compose.prod.yml`](../docker-compose.prod.yml) · [`scripts/deploy.sh`](../scripts/deploy.sh) · [`scripts/healthcheck.sh`](../scripts/healthcheck.sh)
 
-**상태: 2026-10-25 Azure VM 에 실배포. CD #4 에서 end-to-end 성공, CD #5 에서 자동 롤백 실서버 검증.** 검증 기록은 11절(11.2 가 실서버), 롤백 포스트모템은 [`docs/postmortems/2026-10-25-drill4-auto-rollback.md`](postmortems/2026-10-25-drill4-auto-rollback.md).
+**상태: 2026-10-25 Azure VM 에 실배포. CD #4 에서 end-to-end 성공, CD #5 에서 자동 롤백 실서버 검증.** 2026-11-05 CD #7·#8(Dependabot 머지) 배포 성공, 배포 후 스모크 테스트 통과. 검증 기록은 11절(11.2 가 실서버), 롤백 포스트모템은 [`docs/postmortems/2026-10-25-drill4-auto-rollback.md`](postmortems/2026-10-25-drill4-auto-rollback.md).
 
 ## 1. 한눈에
 
@@ -237,6 +237,8 @@ Azure 쪽(Terraform `infra/terraform/github-oidc.tf` 가 만든다):
 | 역할 | **Virtual Machine Contributor, 범위 = VM 리소스 하나.** `az vm run-command invoke` 가 요구하는 `Microsoft.Compute/virtualMachines/runCommand/action` 포함. RG 의 다른 리소스(Storage, Key Vault)는 보이지도 않는다 |
 | 더 좁히려면 | 사용자 지정 역할: `Actions = [Microsoft.Compute/virtualMachines/read, Microsoft.Compute/virtualMachines/runCommand/action]`, 범위 VM. Contributor 가 가진 start/stop/delete 가 빠진다. 단, run-command 는 VM 안에서 **root** 로 돌기 때문에 이 권한 하나가 사실상 VM 전체다 — subject 를 환경 하나로 묶는 것이 진짜 통제다 |
 
+**사람 MFA 정책과 워크로드 ID 는 분리돼 있다 — 2026-11-05 관찰.** 같은 날 사람의 로컬 `az` CLI 는 보안 기본값에 막혔지만(`AADSTS530035`, `infra.md` 4.9절), CD #7·#8 의 `azure/login`(OIDC 페더레이션)은 영향 없이 통과했다(11.2절). 사람용 로그인 정책이 바뀌거나 사람 계정이 막혀도 배포 경로는 따로 산다는 증거다.
+
 ## 8. VM 이 갖춰야 하는 것 (cloud-init 이 하는 것 / 사람이 한 번 하는 것)
 
 | 항목 | 누가 | 상태 |
@@ -260,7 +262,7 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 | run-command 90분 초과 / job 30분 초과 | job 취소. VM 의 스크립트는 **계속 돈다**(run-command 가 시작한 프로세스는 에이전트가 끝낸다고 보장하지 않음) | `/var/log/booking-deploy.log` 와 `history.log` 로 실제 결과 확인 |
 | 출력 4KB 잘림 | 마커가 끝에 있어 잘려도 살아남는다. 그래도 없으면 job 실패("no DEPLOY_RESULT marker") | VM 의 `/var/log/booking-deploy-last.out` |
 | 같은 VM 에 run-command 가 이미 실행 중 | `az` 가 "Run command extension execution is in progress" 로 실패 | concurrency 가 보통 막는다. 수동 실행과 겹쳤다면 기다린다 |
-| VM 꺼짐(자동 종료 스케줄) | `az vm run-command` 가 VM 상태 오류 | VM 켜고 재실행 |
+| VM 꺼짐(자동 종료 스케줄, 할당 취소) | deploy 단계 "VM 에서 deploy.sh 실행" 이 **즉시 실패**(2026-11-05 CD #8 첫 실행: 14초). 사람이 중지한 뒤 재시작하지 않았다 | VM 을 켠 뒤 `gh run rerun <id> --failed` 로 deploy job 만 재실행(CD #8 에서 성공). 같은 커밋을 재실행하는 것이라 아래 Re-run 행의 "옛 커밋 재배포" 문제와는 다르다 — 단, 그 사이 더 새 커밋이 배포되지 않았을 때만. 사전 확인 자동화는 10절 과제 6 |
 | opsadmin 의 로컬 수정이 있어 checkout 실패 | `repo sync failed — nothing was restarted` | VM 에서 `git status`, 수정은 커밋으로 올린다 |
 | 작업자 IP 가 바뀜 | CD 와 무관(run-command 는 NSG 를 안 거친다). Grafana·SSH 만 막힌다 | `my_ip_cidr` 갱신 후 apply |
 | 실패한 run 을 **Re-run** 했다 | job 은 초록인데 운영이 **한 버전 뒤**로 간다. `history.log` 에 `ok new=<옛 sha> rollback_to=<새 sha>` | **Re-run 은 그 run 의 커밋을 재배포한다.** 재배포·롤백은 Run workflow(`image_tag` 명시, 또는 비워서 최신 커밋)로. 2026-10-25 CD #3 Re-run 이 CD #4 가 올린 `2b46837` 을 `1d951b2` 로 덮어썼다(포스트모템 "부수 발견"). 기계적 방지는 10절 과제 1 |
@@ -275,6 +277,7 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 3. ~~`cd.yml` 에 `paths-ignore: ['docs/**', '**.md']`~~ — **이미 있다**(2.1절). 문서만 바꾼 커밋 `2083a55` 에 CD 가 돌지 않은 것을 Actions 실행 목록(CD 는 #1~#6 만 존재)으로 확인했다. 과제 아님.
 4. compose 레벨 `healthcheck` + `depends_on: condition: service_healthy` → `up -d` 단계에서 더 일찍 실패하게.
 5. 비공개 저장소·GHCR 패키지 지원: 배포 키 또는 읽기 PAT 를 Key Vault 에 두고 cloud-init·deploy.sh 가 관리 ID 로 꺼내 쓰기(7절 전제).
+6. (2026-11-05 추가) deploy 전에 VM 전원 상태를 확인해, 꺼져 있으면 시작하거나 "VM 이 꺼져 있음" 같은 명확한 메시지로 실패 — 지금은 run-command 오류로 14초 만에 실패해 원인을 로그에서 찾아야 한다(9절).
 
 그 전부터 있던 것:
 - 환경 보호 규칙(승인자 1명)을 `production` 에 붙이기 — 수동 롤백은 빨라야 하므로 보류.
@@ -296,7 +299,7 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 | `healthcheck.sh` 실제 스택 | 7/7 running, healthz 3/3, targets 5/5, 당시 훈련 2번 중이라 `NeedsReviewRatioHigh` warning 1 → RESULT WARN, exit 0. chrony Normal, 컨테이너 시계 오차 −0.0s, 백업 나이 0h. `DOCKER_BIN=docker.exe` 강제 실행도 동일 |
 | 미검증 | root 로 실행되는 `runuser` 경로(로컬에서 root 아님), 실제 `az vm run-command` 응답 |
 
-### 11.2 실서버 (2026-10-25, Azure VM `vm-bookingops-lab`)
+### 11.2 실서버 (2026-10-25 ~ 11-05, Azure VM `vm-bookingops-lab`)
 
 시각은 UTC(KST = +9h). 인프라 쪽 기록은 `infra.md` 8.2절.
 
@@ -310,7 +313,9 @@ GHCR 인증: 저장소가 공개이고 이미지에 비밀값이 없으므로 **
 | CD #4 | `2b46837` | push (OIDC 수정) | **전부 초록**, 1m 36s, deploy 49s | **첫 end-to-end 성공**: OIDC 로그인 → `az vm run-command` → VM `deploy.sh` → 헬스 3/3. 03:45:36Z |
 | CD #5 | `6bb00dc` | push (훈련 4번, `PORT` 18080) | deploy 빨강 — `DEPLOY_RESULT=rolled_back` | 자동 롤백 73초. [포스트모템](postmortems/2026-10-25-drill4-auto-rollback.md) |
 | CD #6 | `2ec0e49` | push (revert) | 초록 | 정상 복귀 |
-| (없음) | `2083a55` | push (문서만) | **CD 실행 안 됨** | `paths-ignore` 가 동작. Actions 목록에 CD 는 #1~#6 만 있음 |
+| (없음) | `2083a55` | push (문서만) | **CD 실행 안 됨** | `paths-ignore` 가 동작. Actions 목록에 CD 는 #1~#6 만 있음(2026-10-25 기준) |
+| CD #7 | `448089a` | push (Dependabot PR #2 squash 머지, `docker/login-action` 갱신) | 초록 (2026-11-05) | 새 `login-action` 으로 GHCR 로그인·푸시 정상 |
+| CD #8 | `9d33c91` | push (Dependabot PR #1 squash 머지, `anthropic-sdk-go` 1.82.0 → 1.84.0, 마이너, CI 7개 통과) | 첫 실행 deploy 실패 → `--failed` 재실행 초록 (2026-11-05) | 첫 실행은 "VM 에서 deploy.sh 실행" 이 14초 만에 실패 — VM 이 할당 취소 상태(사람이 중지 후 재시작 안 함). VM 시작 후 `gh run rerun <id> --failed` 로 deploy 만 재실행 → 성공. 같은 커밋 재실행이라 CD #3 의 "옛 커밋 재배포" 와 다르다(9절). **배포 후 스모크 테스트(VM 안, 9d33c91)**: `POST 127.0.0.1:8080/bookings` → 201, 같은 `Idempotency-Key` 재전송 → 200 + 같은 id 1. `parsed` 8필드 정확(KRPUS→USLAX, 40HC×2, shipper·consignee·cargo·ETD). status `parsed → sent → confirmed`. 지표 `booking_claude_requests_total{result="ok"}` 1(요청 2번에 Claude 호출 1번), 지연 2.04s, 토큰 입력 349·출력 102, 모델 `claude-opus-5-5`. `healthcheck.sh` `RESULT: OK`(warn 0) |
 
 VM 의 `.deploy/history.log` ([증거 사본](postmortems/evidence/drill4/history.log)):
 ```

@@ -13,6 +13,8 @@
 1. **CD 자동 롤백** — [Actions › CD](https://github.com/ParkBomJun/booking-ops-lab/actions/workflows/cd.yml) 실행 목록의 연속 세 건: **#4 초록**(첫 end-to-end 성공, 1m 36s) → **#5 빨강**(의도적 결함 `6bb00dc`, deploy job 이 `DEPLOY_RESULT=rolled_back` 로 끝남, 롤백 73초) → **#6 초록**(revert).
 2. **무슨 일이 있었나** — [훈련 4번 포스트모템](docs/postmortems/2026-10-25-drill4-auto-rollback.md)과 VM 의 배포 이력 사본 [history.log](docs/postmortems/evidence/drill4/history.log). `rolled_back new=6bb00dc… rollback_to=1d951b2…` 한 줄이 자동 롤백의 증거다.
 3. **화면** — [docs/screenshots/](docs/screenshots/README.md). Grafana 는 NSG 로 작업자 IP 에만 열려 있어 외부에서 접속할 수 없으므로 **스크린샷으로 대체**한다.
+4. **배포 후 스모크 테스트** — 2026-11-05 CD #8(`9d33c91`) 배포 직후 VM 안에서 실행. `POST /bookings` → 201, 같은 `Idempotency-Key` 재전송 → 200 + 같은 id. `parsed` 8필드 정확(KRPUS→USLAX, 40HC×2), status `parsed → sent → confirmed`. 요청 2번에 Claude 호출 1번(`booking_claude_requests_total{result="ok"}` 1, 지연 2.04s). `healthcheck.sh` `RESULT: OK`. 기록: [docs/cd.md](docs/cd.md) 11.2절.
+   - VM 에서는 booking-api 가 `127.0.0.1:8080`, worker 가 `127.0.0.1:8081` 에만 열려 있다. 외부에서 닿는 것은 Grafana 3000 과 SSH 뿐이고, NSG 가 작업자 IP 만 허용한다.
 
 ## 이 저장소가 보여주는 것
 
@@ -202,11 +204,13 @@ Claude Code를 페어 프로그래머로 썼고, 설계 결정과 검증은 직�
 2. `deploy.sh`: 롤백 완료 시 Discord 에 `rolled_back new=… rollback_to=…` 한 줄 전송.
 3. ~~`cd.yml` 에 `paths-ignore: ['docs/**', '**.md']`~~ — 이미 있다. 문서만 바꾼 커밋 `2083a55` 에 CD 가 돌지 않은 것을 Actions 목록으로 확인했다.
 4. compose 레벨 `healthcheck` + `depends_on: condition: service_healthy`.
-5. `go.mod` 모듈 경로를 `github.com/ParkBomJun/...` 로 변경(import 일괄). 지금은 AI 가 추측한 `rkrsi` 가 남아 있다(빌드엔 영향 없음, [docs/ai-usage.md](docs/ai-usage.md)).
+5. `go.mod` 모듈 경로를 `github.com/ParkBomJun/...` 로 변경(import 일괄). 지금은 AI 가 WSL 사용자명을 GitHub ID 로 추측한 `rkrsi` 가 남아 있다 — 같은 추측의 세 번째 사례(빌드엔 영향 없음, [docs/ai-usage.md](docs/ai-usage.md)).
 6. 비공개 저장소·GHCR 패키지 지원(배포 키 또는 읽기 PAT 를 Key Vault 에).
 7. ~~`backup.sh` → Blob 1회 실행~~ — 2026-10-25 수동·cron 모두 성공. 훈련 5번(복구)은 미실행.
 9. cloud-init 에서 cron 자동 등록, 꺼진 VM 의 백업 공백 대책(자동 종료 해제 또는 백업 전 자동 시작).
 10. 로컬 `az` 인증 오류 `AADSTS530035` 원인 조사(지금은 포털로 우회).
-8. Dependabot PR #1 (anthropic-sdk-go 1.82→1.84, CI 초록) 머지.
+8. ~~Dependabot PR #1 (anthropic-sdk-go 1.82→1.84, CI 초록) 머지~~ — 2026-11-05 완료(CD #8, `9d33c91`). PR #2(`docker/login-action`)도 머지(CD #7, `448089a`).
+11. deploy 전 VM 전원 상태 확인 — 꺼져 있으면 시작하거나 명확한 메시지로 실패(2026-11-05 CD #8 첫 실행이 꺼진 VM 때문에 14초 만에 실패, [docs/cd.md](docs/cd.md) 9절).
+12. 파싱 모델 비용: 정형 필드 추출에 `claude-opus-5-5` 를 쓰고 있다. 가벼운 모델과 정확도·비용을 비교한 뒤 결정.
 
 그 뒤 남은 것: 훈련 2 · 3 · 5 · 6 포스트모템 → `security.md`.

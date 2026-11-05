@@ -703,7 +703,7 @@ destroy 뒤 `az group list -o table` 로 남은 그룹을 확인한다(`NetworkW
 | 재부팅 후 `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` — **2026-10-25 실제** | `cloud-init clean` 이 인스턴스를 새것으로 취급해 SSH 호스트 키를 재생성 | `ssh-keygen -R <fqdn>` 후 재접속. 공격 아님 |
 | VM 에서 `docker manifest inspect ghcr.io/parkbomjun/...` → `unauthorized` — **2026-10-25 실제** | GitHub Actions 가 올린 GHCR 패키지는 기본 **비공개**. `deploy.sh` 는 의도적으로 `docker login` 을 하지 않는다 | 패키지 3개를 각각 Package settings → Change visibility → Public (저장소 공개와 **별개 설정**). 이미지에 비밀값은 없다(런타임 `.env` 에서만) |
 | `azure/login`: `AADSTS700213: No matching federated identity record found for presented assertion subject 'repo:ParkBomJun@139955781/booking-ops-lab@1423225568:environment:production'` — **2026-10-25 실제** | GitHub 가 새 저장소에 **강화 subject 형식**(`owner@<owner_id>/repo@<repo_id>`)을 쓴다. 코드는 옛 형식 `owner/repo` 전제 | 변수 `github_owner_id`, `github_repository_id` 추가 + `local.github_oidc_repo` (커밋 `2b46837`). ID 는 에러 메시지 또는 `GET https://api.github.com/users/<owner>`, `/repos/<owner>/<repo>` 의 `id`. apply 는 페더레이션 자격 증명 2개 `updated in-place` |
-| 로컬 `az vm start` → `AADSTS530035` (보안 기본값이 로그인 차단). `az login --use-device-code` 는 로그인 뒤 "이 리소스에 액세스할 권한이 없음" 으로 거부 — **2026-11-05 실제**(가입 약 11일 후) | `<미해결 — 원인 조사 중>`. 같은 계정의 포털 로그인은 정상 | `<미해결 — 포털로 우회, 원인 조사 중>`. 포털 > VM > 시작 |
+| 로컬 `az vm start` → `AADSTS530035` (보안 기본값이 로그인 차단). `az login --use-device-code` 는 로그인 뒤 "이 리소스에 액세스할 권한이 없음" 으로 거부 — **2026-11-05 실제**(가입 약 11일 후) | `<미해결 — 원인 조사 중>`. 같은 계정의 포털 로그인은 정상 | `<미해결 — 포털로 우회, 원인 조사 중>`. 포털 > VM > 시작. 비고: 같은 날 CD #7·#8 의 `azure/login`(OIDC 페더레이션)은 영향 없이 통과 — 사람용 MFA 정책과 워크로드 ID 가 분리돼 있다는 증거(`cd.md` 7절) |
 
 ## 5. 보안 검토
 
@@ -827,7 +827,7 @@ terraform {
 | 4.7 | Grafana `http://<fqdn>:3000` | 작업자 IP 에서 접속·로그인 OK. 데이터 소스·대시보드 프로비저닝 정상 |
 | 4.7 | `scripts/healthcheck.sh` (VM) | `RESULT: OK` — 7/7, healthz 3/3, targets 5/5, disk 19%, chrony 동기화. 상세 `cd.md` 11.2절 |
 | 4.7 | `BACKUP_TARGET=azure scripts/backup.sh` | cron 자동 실행 2026-10-25T18:00:05Z 성공 — `uploaded 3 blobs to stbookingopslabdc42/backups`, `OK db=booking file=booking-20261025T180002Z.dump size_bytes=6587 duration_ms=204 toc_entries=16 target=azure` (`journalctl -t booking-backup`, `LAST_SUCCESS` 동일). 그 전 2026-10-25T07:14:45Z 수동 실행도 성공 |
-| 4.7 | 다른 네트워크에서 ssh·:3000 타임아웃 확인 | 미수행 — 다음 접속 때 폰 핫스팟으로 확인 |
+| 4.7 | 다른 네트워크에서 ssh·:3000 타임아웃 확인 | 미수행(2026-11-05 에도) — 대체 네트워크(핫스팟·VPN) 없음. 대안: 모바일 데이터에서 :3000 접속 확인 또는 Azure Network Watcher IP 흐름 확인 |
 | 운영 (2026-11-05 확인) | cron 등록 | `/etc/cron.d/booking-backup`(`0 18 * * *` = 03:00 KST), `/etc/cron.d/booking-healthcheck`(`5 * * * *`) 둘 다 있음. 헬스체크 자동 실행 확인 — 최근 2026-11-05 04:05 UTC, prometheus targets 5/5 up, alerts 0 |
 | 운영 (2026-10-26~11-05) | VM 할당 취소 기간의 백업 | 자동 종료 뒤 재시작하지 않아 **백업 0회**. 11/05 재시작 후 첫 헬스체크가 `WARN last backup 250h ago` 로 감지 — 신선도 검사가 작동한 증거. 과제 7절 14번 |
 | 운영 (2026-11-05) | 할당 취소 → 포털에서 VM 시작 (콜드 부팅) | 컨테이너 7개가 사람 개입 없이 전부 Up, postgres healthy. 배포 태그 `2ec0e49` 유지(`.deploy/current_tag`). **단, 앱 2개가 재시작으로 복구됐다**: postgres 03:59:10Z 기동 → booking-api·booking-worker 03:59:13Z `connection refused`, 03:59:16~17Z `the database system is starting up (57P03)` 로 각 2회 종료 → 재시작 정책으로 03:59:17.8Z 정상화(약 7초). 헬스체크가 `restarts: booking-api(2) booking-worker(2)` WARN 으로 감지. 컨테이너 생성 시각이 2026-10-25T06:40Z(revert 배포)라 훈련 4번과 무관 |
