@@ -18,7 +18,7 @@
 
 ## 이 저장소가 보여주는 것
 
-| 공고 항목 | 구현 | 증거 |
+| 영역 | 구현 | 증거 |
 |---|---|---|
 | 모니터링 시스템 구축·운영 | Prometheus가 서비스 3개 + Alertmanager를 15초마다 수집, Grafana 대시보드를 JSON으로 프로비저닝 | [prometheus.yml](infra/monitoring/prometheus.yml) · [대시보드](infra/monitoring/grafana/dashboards/booking-api.json) · [지표 설계](docs/metrics.md) |
 | 장애 원인 분석·대응 프로세스 | 장애 주입 → 알림 도착 시간 측정 → 포스트모템. 알림마다 runbook 항목 연결 | [runbook](docs/runbook.md) · [포스트모템 3건](docs/postmortems/) |
