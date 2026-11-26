@@ -37,7 +37,7 @@ jobs:
       # go.mod 의 `go 1.27.2` 를 그대로 쓴다. 버전을 두 곳에 적지 않는다.
       # 경로는 저장소 루트 기준 (working-directory 는 uses 스텝의 with 에 안 먹는다).
       - name: Go 설치 + 모듈 캐시
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: services/${{ matrix.service }}/go.mod
           cache-dependency-path: services/${{ matrix.service }}/go.sum
